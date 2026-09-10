@@ -1,60 +1,110 @@
 import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api } from "../../lib/api";
 
-export default function PatientMessages() {
+export default function AdminMessages() {
+  const [threads, setThreads] = useState([]);
+  const [selected, setSelected] = useState(null);
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
   const bottomRef = useRef(null);
+  // Coming from a "New message from ..." notification lands here as
+  // /admin/messages?patient_id=5 — once threads load, auto-open that one so
+  // clicking the notification actually shows the conversation.
+  const [searchParams] = useSearchParams();
+  // Guards against re-opening the notification's thread every time `threads`
+  // refreshes (e.g. after sending a reply) — only auto-select it once, the
+  // first time it becomes available.
+  const autoOpenedRef = useRef(false);
 
-  function load() {
-    api.get("/messages").then(setMessages).catch(() => {});
+  function loadThreads() {
+    api.get("/messages/threads").then(setThreads).catch(() => {});
+  }
+  useEffect(loadThreads, []);
+
+  useEffect(() => {
+    if (autoOpenedRef.current) return;
+    const targetId = searchParams.get("patient_id");
+    if (!targetId || threads.length === 0) return;
+    const match = threads.find((t) => String(t.patient_id) === targetId);
+    if (match) {
+      autoOpenedRef.current = true;
+      openThread(match);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threads, searchParams]);
+
+  async function openThread(t) {
+    setSelected(t);
+    const msgs = await api.get(`/messages?patient_id=${t.patient_id}`);
+    setMessages(msgs);
   }
 
-  useEffect(load, []);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   async function send(e) {
     e.preventDefault();
-    if (!text.trim()) return;
-    await api.post("/messages", { body: text });
+    if (!text.trim() || !selected) return;
+    await api.post("/messages", { body: text, patient_id: selected.patient_id });
     setText("");
-    load();
+    const msgs = await api.get(`/messages?patient_id=${selected.patient_id}`);
+    setMessages(msgs);
+    loadThreads();
   }
 
   return (
     <div className="space-y-6">
       <h2 className="font-display text-2xl font-bold text-forest-950">Messages</h2>
-      <div className="bg-cream-50 border border-cream-200 rounded-2xl flex flex-col h-[520px]">
-        <div className="flex-1 overflow-y-auto p-5 space-y-3">
-          {messages.length === 0 && (
-            <p className="text-sm text-forest-700 text-center py-10">
-              No messages yet. Send a message to the clinic below.
-            </p>
-          )}
-          {messages.map((m) => (
-            <div key={m.id} className={`flex ${m.sender === "patient" ? "justify-end" : "justify-start"}`}>
-              <div
-                className={`max-w-md px-4 py-2 rounded-2xl text-sm ${
-                  m.sender === "patient" ? "bg-brand-900 text-brand-50" : "bg-cream-200 text-forest-950"
-                }`}
-              >
-                {m.body}
-              </div>
-            </div>
+   <div className="border border-cream-200 rounded-2xl flex h-[560px] overflow-hidden shadow-[0_2px_12px_rgba(37,53,34,0.12)]">
+        <div className="w-64 border-r border-cream-200 overflow-y-auto bg-cream-100">
+          {threads.map((t) => (
+            <button
+              key={t.patient_id}
+              onClick={() => openThread(t)}
+              className={`w-full text-left px-4 py-3 border-b border-cream-200 hover:bg-cream-100 ${
+                selected?.patient_id === t.patient_id ? "bg-cream-200" : ""
+              }`}
+            >
+              <p className="font-medium text-sm text-forest-950">{t.name}</p>
+              <p className="text-xs text-forest-700 truncate">{t.last_message || "No messages yet"}</p>
+            </button>
           ))}
-          <div ref={bottomRef} />
+          {threads.length === 0 && <p className="text-sm text-forest-700 p-4">No patients yet.</p>}
         </div>
-        <form onSubmit={send} className="flex items-center gap-3 border-t border-cream-200 p-4">
-          <input
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder="Type a message to the clinic…"
-            className="flex-1 rounded-full border border-cream-200 bg-cream-100 px-4 py-2 text-sm outline-none focus:border-forest-700"
-          />
-          <button className="w-10 h-10 rounded-full bg-brand-900 text-brand-50 flex items-center justify-center">➤</button>
-        </form>
+
+        <div className="flex-1 flex flex-col bg-cream-50">
+          {selected ? (
+            <>
+              <div className="flex-1 overflow-y-auto p-5 space-y-3">
+                {messages.map((m) => (
+                  <div key={m.id} className={`flex ${m.sender === "admin" ? "justify-end" : "justify-start"}`}>
+                    <div
+                      className={`max-w-md px-4 py-2 rounded-2xl text-sm ${
+                        m.sender === "admin" ? "bg-brand-900 text-brand-50" : "bg-cream-200 text-forest-950"
+                      }`}
+                    >
+                      {m.body}
+                    </div>
+                  </div>
+                ))}
+                <div ref={bottomRef} />
+              </div>
+              <form onSubmit={send} className="flex items-center gap-3 border-t border-cream-200 p-4">
+                <input
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  placeholder={`Message ${selected.name}…`}
+                  className="flex-1 rounded-full border border-cream-200 bg-cream-100 px-4 py-2 text-sm outline-none focus:border-forest-700"
+                />
+                <button className="w-10 h-10 rounded-full bg-brand-900 text-brand-50 flex items-center justify-center">➤</button>
+              </form>
+            </>
+          ) : (
+            <p className="m-auto text-sm text-forest-700">Select a conversation to view messages.</p>
+          )}
+        </div>
       </div>
     </div>
   );

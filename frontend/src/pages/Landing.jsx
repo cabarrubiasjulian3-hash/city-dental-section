@@ -83,7 +83,7 @@ export default function Landing() {
   return (
     <div className="min-h-screen bg-cream-100">
       {/* Top bar */}
-      <header className="bg-gradient-to-r from-forest-900 via-forest-700 to-cream-200 text-cream-50">
+     <header className="bg-[linear-gradient(to_right,_#395d2e_0%,_#395d2e_45%,_#ececc3_100%)] border-t border-[#181f14] text-cream-50">
         <div className="max-w-6xl mx-auto flex items-center justify-between px-1 py-5">
           <div className="flex items-center gap-3">
            <div className="w-14 h-14 rounded-full bg-cream-50/10 flex items-center justify-center overflow-hidden">
@@ -101,21 +101,21 @@ export default function Landing() {
             <button
               type="button"
               onClick={() => setAdminLoginOpen(true)}
-              className="text-sm font-bold bg-white text-ink-900 border border-forest-800 rounded-full px-5 py-2 shadow-[3px_3px_4px_0_rgba(61,83,53,0.6)] hover:bg-forest-800 hover:text-cream-50 transition-colors"
+              className="text-sm font-bold bg-white text-ink-900 border border-forest-800 rounded-full px-5 py-2 shadow-[3px_3px_4px_0_rgba(61,83,53,0.6)] hover:bg-[#859336] hover:border-transparent hover:text-cream-50 transition-colors"
             >
               Admin Portal
             </button>
             <button
               type="button"
               onClick={() => setSignupOpen(true)}
-              className="text-sm font-bold bg-white text-ink-900 border border-forest-800 rounded-full px-5 py-2 shadow-[3px_3px_4px_0_rgba(61,83,53,0.6)] hover:bg-forest-800 hover:text-cream-50 transition-colors"
+              className="text-sm font-bold bg-white text-ink-900 border border-forest-800 rounded-full px-5 py-2 shadow-[3px_3px_4px_0_rgba(61,83,53,0.6)] hover:bg-[#859336] hover:border-transparent hover:text-cream-50 transition-colors"
             >
               Sign up
             </button>
             <button
               type="button"
               onClick={() => setLoginOpen(true)}
-              className="text-sm font-bold bg-white text-ink-900 border border-forest-800 rounded-full px-5 py-2 shadow-[3px_3px_4px_0_rgba(61,83,53,0.6)] hover:bg-forest-800 hover:text-cream-50 transition-colors"
+              className="text-sm font-bold bg-white text-ink-900 border border-forest-800 rounded-full px-5 py-2 shadow-[3px_3px_4px_0_rgba(61,83,53,0.6)] hover:bg-[#859336] hover:border-transparent hover:text-cream-50 transition-colors"
             >
               Log in
             </button>

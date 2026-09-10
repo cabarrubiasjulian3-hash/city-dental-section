@@ -58,10 +58,8 @@ export default function PatientDashboard() {
           <StatCard label="Last Visit" value={lastVisit || "—"} />
         </div>
       ) : (
-        <div className="rounded-2xl border border-cream-200 bg-cream-100 px-5 py-4 text-sm text-forest-700">
-          You don't have any dental records on file yet, so you're not showing as a returning patient in our system
-          yet. Once the clinic logs a visit for you (during a barangay mission or at the office), it will appear
-          here automatically.
+        <div className="rounded-2xl border border-red-300 bg-red-50 px-5 py-4 text-sm font-medium text-red-600">
+          You don't have any dental records on file yet.
         </div>
       )}
 

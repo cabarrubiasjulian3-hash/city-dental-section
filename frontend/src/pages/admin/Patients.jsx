@@ -344,7 +344,7 @@ export default function AdminPatients() {
     // (e.g. pressing Enter in a field) — Add Records (date + service) is
     // required before a patient record can be created.
     if (!newPatientForm.initial_record_date || !newPatientForm.initial_procedure) {
-      setRowError("Kailangang punan ang petsa at piliin ang serbisyo sa \"Add Records\" bago makapag-create ng patient record.");
+      setRowError("Please fill in the date and select a service in \"Add Records\" before creating the patient record.");
       return;
     }
 
@@ -1048,7 +1048,7 @@ export default function AdminPatients() {
                 Add Records <span className="text-red-600">*</span>
               </p>
               <p className="text-xs text-forest-700 mb-2">
-                Kailangan ng petsa at serbisyo bago malikha ang bagong patient record.
+                A date and service are required before the new patient record can be created.
               </p>
               <div className="grid grid-cols-2 gap-2">
                 <input
@@ -1090,7 +1090,7 @@ export default function AdminPatients() {
               </div>
               {(!newPatientForm.initial_record_date || !newPatientForm.initial_procedure) && (
                 <p className="mt-2 text-xs font-medium text-red-600">
-                  ⚠ Kailangang punan ang petsa at piliin ang serbisyo bago makapag-create ng patient record.
+                  ⚠ Please fill in the date and select a service before creating the patient record.
                 </p>
               )}
             </div>
@@ -1124,7 +1124,7 @@ export default function AdminPatients() {
                 className="rounded-full bg-forest-900 px-4 py-2 text-sm font-semibold text-cream-50 disabled:opacity-60"
                 title={
                   !newPatientForm.initial_record_date || !newPatientForm.initial_procedure
-                    ? "Punan muna ang petsa at serbisyo sa 'Add Records' bago mag-create."
+                    ? "Fill in the date and service in 'Add Records' before creating the record."
                     : undefined
                 }
               >
@@ -1728,7 +1728,7 @@ export default function AdminPatients() {
             <div className="add-record-section">
               <h3>Add Records</h3>
               <p>
-                Para sa returning patient, magdagdag lamang ng bagong visit, procedure, notes, at vital signs.
+                For a returning patient, simply add a new visit, procedure, notes, and vital signs.
               </p>
             </div>
 

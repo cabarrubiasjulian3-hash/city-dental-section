@@ -1,8 +1,29 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { PanelLeftClose, PanelLeftOpen, LogOut, Settings, CircleHelp, Moon, ChevronRight, X } from "lucide-react";
+import {
+  PanelLeftClose,
+  PanelLeftOpen,
+  LogOut,
+  Settings,
+  CircleHelp,
+  Moon,
+  ChevronRight,
+  X,
+  Bell,
+  Users,
+  MessageSquare,
+  UserPlus,
+} from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../lib/api";
+
+// One lucide icon per notification "type" the backend sends (see
+// backend/routes/notifications.js) — falls back to Bell for anything else.
+const NOTIFICATION_ICONS = {
+  patient: Users,
+  message: MessageSquare,
+  staff: UserPlus,
+};
 
 export default function PortalLayout({ title, subtitle, navItems }) {
   const { user, logout } = useAuth();
@@ -56,6 +77,44 @@ export default function PortalLayout({ title, subtitle, navItems }) {
     localStorage.setItem("cds_dark_mode", darkMode ? "1" : "0");
   }, [darkMode]);
 
+  // Notification bell — combines recent new patients, patient messages, and
+  // new staff/dentists from the backend (see routes/notifications.js).
+  // Admin-only for now, since that's what the feed covers. "Unread" is
+  // tracked client-side: anything newer than the last time the dropdown was
+  // opened counts toward the badge.
+  const [notifications, setNotifications] = useState([]);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [lastSeenAt, setLastSeenAt] = useState(() => localStorage.getItem("cds_notifications_seen_at") || "");
+
+  useEffect(() => {
+    if (user?.role !== "admin") return;
+    function load() {
+      api.get("/notifications").then(setNotifications).catch(() => {});
+    }
+    load();
+    const interval = setInterval(load, 30000);
+    return () => clearInterval(interval);
+  }, [user?.role]);
+
+  const unreadCount = notifications.filter((n) => !lastSeenAt || new Date(n.at) > new Date(lastSeenAt)).length;
+
+  function toggleNotifications() {
+    setNotifOpen((open) => {
+      const next = !open;
+      if (next) {
+        const now = new Date().toISOString();
+        localStorage.setItem("cds_notifications_seen_at", now);
+        setLastSeenAt(now);
+      }
+      return next;
+    });
+  }
+
+  function openNotification(n) {
+    setNotifOpen(false);
+    navigate(n.link);
+  }
+
   return (
     <div
       className={`h-screen flex bg-cream-100 overflow-hidden print:h-auto print:block print:overflow-visible ${
@@ -93,7 +152,7 @@ export default function PortalLayout({ title, subtitle, navItems }) {
                 className={({ isActive }) =>
                   `group flex items-center gap-3 px-3 py-2.5 text-sm font-semibold transition-colors duration-150 ${
                     isActive
-                      ? "bg-brand-900 text-brand-50 rounded-full"
+                      ? "bg-[#26401e] text-[#ebebc2] rounded-full"
                       : "text-forest-950 hover:bg-cream-200 rounded-xl"
                   }`
                 }
@@ -121,7 +180,7 @@ export default function PortalLayout({ title, subtitle, navItems }) {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0 print:block print:w-full">
-        <header className="flex items-center justify-between px-8 py-5 bg-brand-900 print:hidden">
+        <header className="flex items-center justify-between px-8 py-5 bg-[#26401e] print:hidden">
           <div className="flex items-center gap-3">
             <button
               onClick={() => setSidebarOpen((v) => !v)}
@@ -130,11 +189,62 @@ export default function PortalLayout({ title, subtitle, navItems }) {
             >
               {sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
             </button>
-            <h1 className="text-xl font-display font-bold text-brand-50">{pageTitle}</h1>
+            <h1 className="text-xl font-display font-bold text-[#ebebc2]">{pageTitle}</h1>
           </div>
           <div className="flex items-center gap-4">
-            <button className="w-9 h-9 rounded-full bg-brand-800 text-brand-50 flex items-center justify-center">🔔</button>
-            <button className="w-9 h-9 rounded-full bg-brand-800 text-brand-50 flex items-center justify-center">⚙</button>
+            {/* Notification bell — admin only, since the feed (new patients,
+                messages, staff) is admin-facing. Settings lives in the
+                profile dropdown below, so there's no separate gear icon
+                here anymore. */}
+            {user?.role === "admin" && (
+              <div className="relative">
+                <button
+                  onClick={toggleNotifications}
+                  className="relative w-9 h-9 rounded-full bg-brand-800 text-brand-50 flex items-center justify-center"
+                  title="Notifications"
+                >
+                  <Bell size={16} />
+                  {unreadCount > 0 && (
+                    <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-leaf-500 text-forest-950 text-[10px] font-bold flex items-center justify-center">
+                      {unreadCount > 9 ? "9+" : unreadCount}
+                    </span>
+                  )}
+                </button>
+
+                {notifOpen && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setNotifOpen(false)} />
+                    <div className="absolute right-0 top-full mt-2 w-80 bg-cream-50 rounded-2xl shadow-[0_8px_24px_rgba(37,53,34,0.25)] z-20 max-h-96 overflow-y-auto">
+                      <p className="px-4 pt-4 pb-2 text-sm font-display font-bold text-forest-950">Notifications</p>
+                      {notifications.length === 0 ? (
+                        <p className="px-4 pb-4 text-sm text-forest-600">No notifications yet.</p>
+                      ) : (
+                        <div className="pb-2">
+                          {notifications.map((n) => {
+                            const Icon = NOTIFICATION_ICONS[n.type] ?? Bell;
+                            return (
+                              <button
+                                key={n.id}
+                                onClick={() => openNotification(n)}
+                                className="w-full flex items-start gap-3 px-4 py-2.5 hover:bg-cream-200 transition-colors text-left"
+                              >
+                                <span className="w-8 h-8 rounded-full bg-cream-200 text-forest-900 flex items-center justify-center shrink-0">
+                                  <Icon size={15} />
+                                </span>
+                                <span className="min-w-0">
+                                  <span className="block text-sm font-semibold text-forest-950">{n.title}</span>
+                                  <span className="block text-xs text-forest-600 truncate">{n.detail}</span>
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
             {/* Profile dropdown — click the avatar/name to open a card with
                 the admin's profile row (bordered, like the reference) and
                 the single Log out action for the whole portal. */}

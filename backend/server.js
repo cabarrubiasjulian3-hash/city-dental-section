@@ -12,6 +12,7 @@ import barangayScheduleRoutes from "./routes/barangaySchedule.js";
 import recurringBarangayScheduleRoutes from "./routes/recurringBarangaySchedule.js";
 import monthlyReportRoutes from "./routes/monthlyReports.js";
 import toothChartRoutes from "./routes/toothChart.js";
+import notificationRoutes from "./routes/notifications.js";
 
 const app = express();
 app.use(cors());
@@ -29,6 +30,7 @@ app.use("/api/barangay-schedule", barangayScheduleRoutes);
 app.use("/api/recurring-schedule", recurringBarangayScheduleRoutes);
 app.use("/api/monthly-reports", monthlyReportRoutes);
 app.use("/api/patients", toothChartRoutes);
+app.use("/api/notifications", notificationRoutes);
 
 app.use((req, res) => res.status(404).json({ error: "Not found." }));
 // eslint-disable-next-line no-unused-vars

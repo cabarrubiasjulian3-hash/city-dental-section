@@ -1,64 +1,63 @@
-// Every card gets the same soft, medium "outer shadow" look (not a border)
-// so cards read as gently raised, borderless panels — matches the
-// reference dashboard design.
-const CARD_SHADOW = "shadow-[0_2px_12px_rgba(37,53,34,0.10)]";
+// Shared, small presentational building blocks used across the admin and
+// patient portals: a bordered panel with an optional header (Card), a
+// compact metric tile (StatCard), a status pill (Badge), and a "nothing
+// here yet" placeholder (EmptyState). Kept intentionally dumb — no data
+// fetching, just layout + theme tokens — so any page can drop them in.
 
-export function Card({ title, subtitle, action, children, className = "" }) {
+export function Card({ title, subtitle, action, className = "", children }) {
   return (
-    <div className={`bg-cream-50 rounded-2xl overflow-hidden ${CARD_SHADOW} ${className}`}>
-      {title && (
-        <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-1">
+    <div className={`bg-cream-50 border border-cream-200 rounded-2xl p-5 ${className}`}>
+      {(title || subtitle || action) && (
+        <div className="flex items-start justify-between gap-3 mb-4">
           <div className="min-w-0">
-            <h3 className="font-display font-bold text-base text-forest-950">{title}</h3>
+            {title && <h3 className="font-display text-base font-bold text-forest-950">{title}</h3>}
             {subtitle && <p className="text-xs text-forest-600 mt-0.5">{subtitle}</p>}
           </div>
           {action}
         </div>
       )}
-      <div className="p-5 pt-2 flex-1">{children}</div>
+      {children}
     </div>
   );
 }
 
 export function StatCard({ label, value, subtitle, icon }) {
   return (
-    <div className={`bg-cream-50 rounded-2xl p-5 ${CARD_SHADOW}`}>
-      <div className="flex items-start justify-between gap-2">
-        <p className="text-sm text-forest-700">{label}</p>
+    <div className="bg-cream-50 border border-cream-200 rounded-2xl p-5">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-forest-600">{label}</p>
         {icon && (
-          <span className="w-8 h-8 rounded-full bg-leaf-200 text-brand-800 flex items-center justify-center shrink-0">
+          <span className="w-8 h-8 rounded-full bg-cream-200 text-forest-900 flex items-center justify-center shrink-0">
             {icon}
           </span>
         )}
       </div>
-      <p className="text-3xl font-display font-bold text-forest-950 mt-1">{value}</p>
+      <p className="mt-2 text-2xl font-display font-extrabold text-forest-950">{value}</p>
       {subtitle && <p className="text-xs text-forest-500 mt-1">{subtitle}</p>}
     </div>
   );
 }
 
-const statusColors = {
-  Pending: "bg-amber-100 text-amber-800",
-  Approved: "bg-green-100 text-green-800",
-  Rejected: "bg-red-100 text-red-800",
-  Completed: "bg-lime-100 text-brand-900",
-  Cancelled: "bg-gray-200 text-gray-600",
-  Unpaid: "bg-amber-100 text-amber-800",
-  Paid: "bg-green-100 text-green-800",
-  Waived: "bg-gray-200 text-gray-600",
-  // Barangay Activity Schedule statuses
-  Upcoming: "bg-brand-900 text-brand-50",
-  Ongoing: "bg-lime-200 text-brand-900",
+// Barangay-schedule status pill. Falls back to a neutral style for any
+// status string that isn't one of the three known values.
+const BADGE_STYLES = {
+  Upcoming: "bg-cream-200 text-forest-800",
+  Ongoing: "bg-clay-500 text-white",
+  Completed: "bg-leaf-300 text-forest-900",
 };
 
 export function Badge({ status }) {
   return (
-    <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${statusColors[status] || "bg-gray-100 text-gray-700"}`}>
+    <span
+      className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold whitespace-nowrap ${
+        BADGE_STYLES[status] ?? "bg-cream-200 text-forest-700"
+      }`}
+    >
       {status}
     </span>
   );
 }
 
 export function EmptyState({ children }) {
-  return <p className="text-sm text-forest-700 text-center py-10">{children}</p>;
+  return <p className="text-sm text-forest-600 text-center py-8">{children}</p>;
 }
