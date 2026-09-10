@@ -6,3 +6,5 @@ dist/
 .env.local
 .DS_Store
 backend/watched-excel/*.xlsx
+
+*.env
