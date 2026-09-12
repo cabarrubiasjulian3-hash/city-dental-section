@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api";
 
+// Used by both the Admin Portal and the Doctor Portal (see App.jsx) — a
+// doctor can send messages here same as admin, just scoped server-side to
+// their own patients (see backend/routes/messages.js). readOnly is kept as
+// an option for any future read-only use, but isn't passed by either portal
+// route today.
 export default function AdminMessages({ readOnly = false }) {
   const [threads, setThreads] = useState([]);
   const [selected, setSelected] = useState(null);
@@ -46,7 +51,17 @@ export default function AdminMessages({ readOnly = false }) {
                 selected?.patient_id === t.patient_id ? "bg-cream-200" : ""
               }`}
             >
-              <p className="font-medium text-sm text-forest-950">{t.name}</p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="font-medium text-sm text-forest-950 truncate">{t.name}</p>
+                {/* Only present for admin (see GET /messages/threads) — shows
+                    which doctor is on file for this patient's latest visit,
+                    so admin can see who's handling them at a glance. */}
+                {t.assigned_doctor && (
+                  <span className="shrink-0 text-[10px] font-semibold text-forest-700 bg-cream-200 rounded-full px-2 py-0.5">
+                    Dr. {t.assigned_doctor.replace(/^(dr\.?|doctor)\s+/i, "")}
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-forest-700 truncate">{t.last_message || "No messages yet"}</p>
             </button>
           ))}
@@ -57,17 +72,22 @@ export default function AdminMessages({ readOnly = false }) {
           {selected ? (
             <>
               <div className="flex-1 overflow-y-auto p-5 space-y-3">
-                {messages.map((m) => (
-                  <div key={m.id} className={`flex ${m.sender === "admin" ? "justify-end" : "justify-start"}`}>
-                    <div
-                      className={`max-w-md px-4 py-2 rounded-2xl text-sm ${
-                        m.sender === "admin" ? "bg-brand-900 text-brand-50" : "bg-cream-200 text-forest-950"
-                      }`}
-                    >
-                      {m.body}
+                {messages.map((m) => {
+                  // Both admin and doctor replies are "outgoing" bubbles —
+                  // only the patient's own messages sit on the left.
+                  const outgoing = m.sender === "admin" || m.sender === "doctor";
+                  return (
+                    <div key={m.id} className={`flex ${outgoing ? "justify-end" : "justify-start"}`}>
+                      <div
+                        className={`max-w-md px-4 py-2 rounded-2xl text-sm ${
+                          outgoing ? "bg-brand-900 text-brand-50" : "bg-cream-200 text-forest-950"
+                        }`}
+                      >
+                        {m.body}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
                 <div ref={bottomRef} />
               </div>
               <fieldset disabled={readOnly} style={{ display: "contents" }}>
@@ -75,7 +95,7 @@ export default function AdminMessages({ readOnly = false }) {
                   <input
                     value={text}
                     onChange={(e) => setText(e.target.value)}
-                    placeholder={readOnly ? "Doctor accounts can view messages but cannot send replies." : `Message ${selected.name}…`}
+                    placeholder={readOnly ? "This view is read-only." : `Message ${selected.name}…`}
                     className="flex-1 rounded-full border border-cream-200 bg-cream-100 px-4 py-2 text-sm outline-none focus:border-forest-700 disabled:opacity-60"
                   />
                   <button className="w-10 h-10 rounded-full bg-brand-900 text-brand-50 flex items-center justify-center disabled:opacity-60">➤</button>

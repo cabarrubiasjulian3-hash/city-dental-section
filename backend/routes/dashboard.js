@@ -3,9 +3,11 @@ import db from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { CATEGORY_FIELDS, seedBarangayMonth } from "./monthlyReports.js";
 import { TAYABAS_BARANGAYS } from "../lib/barangays.js";
+import { getDoctorPatientIds } from "../lib/doctorMatch.js";
+import { calcAge } from "../lib/age.js";
 
 const router = Router();
-router.use(requireAuth, requireRole("admin"));
+router.use(requireAuth, requireRole("admin", "doctor"));
 
 router.get("/stats", (req, res) => {
   const thisMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
@@ -193,7 +195,31 @@ router.get("/stats", (req, res) => {
     .sort((a, b) => (b.coveragePct ?? -1) - (a.coveragePct ?? -1));
   const barangaysWithNoEntries = barangayCoverage.filter((b) => b.served === 0).length;
 
+  // Doctor-only extra: everything above is clinic-wide (same numbers an
+  // admin sees), which doesn't tell a doctor anything about their *own*
+  // caseload. This adds that, based on the same dentist-name matching used
+  // by Patient Management and Messages (see lib/doctorMatch.js).
+  let myPatientCount = null;
+  let myRecentRecords = null;
+  if (req.user.role === "doctor") {
+    const myPatientIds = getDoctorPatientIds(db, req.user.name);
+    myPatientCount = myPatientIds.size;
+    myRecentRecords = myPatientIds.size
+      ? db
+          .prepare(
+            `SELECT d.id, d.record_date, d.procedure, u.name AS patient_name, u.birthdate
+             FROM dental_records d JOIN users u ON u.id = d.patient_id
+             WHERE d.patient_id IN (${[...myPatientIds].map(() => "?").join(",")})
+             ORDER BY d.record_date DESC, d.id DESC LIMIT 8`
+          )
+          .all(...myPatientIds)
+          .map((r) => ({ ...r, patient_age: calcAge(r.birthdate) }))
+      : [];
+  }
+
   res.json({
+    myPatientCount,
+    myRecentRecords,
     totalPatients,
     newPatientsThisMonth,
     recordsThisMonth,

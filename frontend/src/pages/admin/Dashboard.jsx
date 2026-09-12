@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Users, Activity, MapPin, TrendingUp } from "lucide-react";
 import { api } from "../../lib/api";
+import { useAuth } from "../../context/AuthContext";
 import { StatCard, Card, EmptyState } from "../../components/ui";
 import { PieChart, AgeGroupDonutChart, BarChart, DomeBarChart, StackedBarChart, LineChart } from "../../components/Charts";
 
@@ -20,14 +21,20 @@ export default function AdminDashboard({ readOnly = false }) {
   // Nothing here mutates data (just a month filter), so readOnly is accepted
   // for a consistent prop signature across doctor-mirrored admin pages but
   // has no effect on this page.
+  const { user } = useAuth();
   const [stats, setStats] = useState(null);
+  const [loadError, setLoadError] = useState("");
   const [barangayMonth, setBarangayMonth] = useState(() => new Date().toISOString().slice(0, 7));
 
   useEffect(() => {
+    setLoadError("");
     api
       .get(`/dashboard/stats?barangayMonth=${barangayMonth}`)
       .then(setStats)
-      .catch(() => {});
+      // Surface the actual error instead of leaving the page blank with no
+      // explanation — a silently-swallowed failure here used to mean the
+      // whole dashboard looked empty with nothing telling you why.
+      .catch((err) => setLoadError(err.message || "Could not load the dashboard."));
   }, [barangayMonth]);
 
   const pieData = useMemo(() => {
@@ -43,6 +50,13 @@ export default function AdminDashboard({ readOnly = false }) {
     [stats]
   );
 
+  if (loadError) {
+    return (
+      <div className="bg-red-50 text-red-700 text-sm rounded-lg px-4 py-3">
+        Could not load the dashboard: {loadError}
+      </div>
+    );
+  }
   if (!stats) return null;
 
   return (
@@ -53,6 +67,41 @@ export default function AdminDashboard({ readOnly = false }) {
           City Dental Office · City of Tayabas, Province of Quezon · {formatMonthLabel(stats.month)} · MONTHLY REPORT
         </p>
       </div>
+
+      {user?.role === "doctor" && (
+        <Card title="My Patients" subtitle="Based on your name as the attending dentist on their records">
+          <div className="flex items-center gap-6">
+            <StatCard label="My Patients" value={stats.myPatientCount ?? 0} icon={<Users size={16} />} />
+            <div className="flex-1 min-w-0">
+              {stats.myRecentRecords?.length ? (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-forest-700 uppercase text-xs">
+                      <th className="py-1">Patient</th>
+                      <th className="py-1">Procedure</th>
+                      <th className="py-1">Date</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stats.myRecentRecords.map((r) => (
+                      <tr key={r.id} className="border-t border-cream-200">
+                        <td className="py-1.5">{r.patient_name}</td>
+                        <td className="py-1.5">{r.procedure}</td>
+                        <td className="py-1.5">{r.record_date}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <EmptyState>
+                  No patients found under your name yet. Ask the admin to confirm your name matches the "dentist"
+                  entered on their records.
+                </EmptyState>
+              )}
+            </div>
+          </div>
+        </Card>
+      )}
 
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard

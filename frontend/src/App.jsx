@@ -107,9 +107,13 @@ export default function App() {
             <Route path="doctor-access" element={<AdminDoctorAccess />} />
           </Route>
 
-          {/* Doctor Portal — same page components as Admin, passed readOnly
-              so everything is preview-only except adding a patient (see
-              Patients.jsx's own readOnly handling). */}
+          {/* Doctor Portal — same page components as Admin. Most stay
+              preview-only via readOnly (Patients also allows adding a new
+              patient — see its own readOnly handling). Barangay Schedule and
+              Messages are NOT read-only for a doctor: they can log/edit
+              barangay activities and can message their own patients
+              (scoped server-side — see routes/messages.js, routes/patients.js
+              and lib/doctorMatch.js). */}
           <Route
             path="/doctor"
             element={
@@ -120,9 +124,9 @@ export default function App() {
           >
             <Route index element={<AdminDashboard readOnly />} />
             <Route path="patients" element={<AdminPatients readOnly />} />
-            <Route path="barangay-schedule" element={<AdminBarangaySchedule readOnly />} />
+            <Route path="barangay-schedule" element={<AdminBarangaySchedule />} />
             <Route path="monthly-report" element={<AdminMonthlyReport readOnly />} />
-            <Route path="messages" element={<AdminMessages readOnly />} />
+            <Route path="messages" element={<AdminMessages />} />
             <Route path="staff" element={<AdminStaff readOnly />} />
           </Route>
         </Routes>
