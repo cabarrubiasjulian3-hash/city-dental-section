@@ -9,6 +9,7 @@ import {
   IconReport,
   IconChat,
   IconStaff,
+  IconDoctor,
 } from "./components/icons";
 
 import Landing from "./pages/Landing";
@@ -27,6 +28,7 @@ import AdminBarangaySchedule from "./pages/admin/BarangaySchedule";
 import AdminMonthlyReport from "./pages/admin/MonthlyReport";
 import AdminMessages from "./pages/admin/Messages";
 import AdminStaff from "./pages/admin/Staff";
+import AdminDoctorAccess from "./pages/admin/DoctorAccess";
 
 const patientNav = [
   { to: "/patient", end: true, icon: <IconDashboard />, label: "Dashboard" },
@@ -43,6 +45,20 @@ const adminNav = [
   { to: "/admin/monthly-report", icon: <IconReport />, label: "Monthly Report" },
   { to: "/admin/messages", icon: <IconChat />, label: "Messages" },
   { to: "/admin/staff", icon: <IconStaff />, label: "Staff Management" },
+  { to: "/admin/doctor-access", icon: <IconDoctor />, label: "Doctor Access" },
+];
+
+// Doctor Portal mirrors the admin portal's pages (same components, passed
+// readOnly) so a doctor can preview everything an admin can — except
+// "Doctor Access" (managing codes/approvals is an admin-only trust
+// decision) and the ability to make edits, which is disabled per-page.
+const doctorNav = [
+  { to: "/doctor", end: true, icon: <IconDashboard />, label: "Dashboard" },
+  { to: "/doctor/patients", icon: <IconUsers />, label: "Patient Management" },
+  { to: "/doctor/barangay-schedule", icon: <IconCalendar />, label: "Barangay Schedule" },
+  { to: "/doctor/monthly-report", icon: <IconReport />, label: "Monthly Report" },
+  { to: "/doctor/messages", icon: <IconChat />, label: "Messages" },
+  { to: "/doctor/staff", icon: <IconStaff />, label: "Staff Management" },
 ];
 
 export default function App() {
@@ -88,6 +104,26 @@ export default function App() {
             <Route path="monthly-report" element={<AdminMonthlyReport />} />
             <Route path="messages" element={<AdminMessages />} />
             <Route path="staff" element={<AdminStaff />} />
+            <Route path="doctor-access" element={<AdminDoctorAccess />} />
+          </Route>
+
+          {/* Doctor Portal — same page components as Admin, passed readOnly
+              so everything is preview-only except adding a patient (see
+              Patients.jsx's own readOnly handling). */}
+          <Route
+            path="/doctor"
+            element={
+              <ProtectedRoute role="doctor">
+                <PortalLayout title="City Dental Section" subtitle="Doctor Portal" navItems={doctorNav} />
+              </ProtectedRoute>
+            }
+          >
+            <Route index element={<AdminDashboard readOnly />} />
+            <Route path="patients" element={<AdminPatients readOnly />} />
+            <Route path="barangay-schedule" element={<AdminBarangaySchedule readOnly />} />
+            <Route path="monthly-report" element={<AdminMonthlyReport readOnly />} />
+            <Route path="messages" element={<AdminMessages readOnly />} />
+            <Route path="staff" element={<AdminStaff readOnly />} />
           </Route>
         </Routes>
       </AuthProvider>

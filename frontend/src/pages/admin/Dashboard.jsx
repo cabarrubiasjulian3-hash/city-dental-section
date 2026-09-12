@@ -16,7 +16,10 @@ function formatMonthLabel(monthStr) {
   return new Date(y, m - 1, 1).toLocaleString("en-US", { month: "long", year: "numeric" }).toUpperCase();
 }
 
-export default function AdminDashboard() {
+export default function AdminDashboard({ readOnly = false }) {
+  // Nothing here mutates data (just a month filter), so readOnly is accepted
+  // for a consistent prop signature across doctor-mirrored admin pages but
+  // has no effect on this page.
   const [stats, setStats] = useState(null);
   const [barangayMonth, setBarangayMonth] = useState(() => new Date().toISOString().slice(0, 7));
 

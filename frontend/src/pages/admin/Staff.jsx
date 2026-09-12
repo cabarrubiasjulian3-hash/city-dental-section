@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../../lib/api";
 import { Card, EmptyState } from "../../components/ui";
 
-export default function AdminStaff() {
+export default function AdminStaff({ readOnly = false }) {
   const [staff, setStaff] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: "", role: "", email: "", phone: "", schedule: "" });
@@ -26,7 +26,13 @@ export default function AdminStaff() {
   }
 
   return (
+    <fieldset disabled={readOnly} style={{ display: "contents" }}>
     <div className="space-y-6">
+      {readOnly && (
+        <div className="bg-clay-500/10 border border-clay-500 text-forest-900 text-sm rounded-lg px-3 py-2">
+          Preview only — doctor accounts can view the staff directory but cannot make changes.
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <h2 className="font-display text-2xl font-bold text-forest-950">Staff Management</h2>
         <button
@@ -85,5 +91,6 @@ export default function AdminStaff() {
         )}
       </Card>
     </div>
+    </fieldset>
   );
 }

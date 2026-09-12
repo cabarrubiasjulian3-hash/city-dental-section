@@ -82,7 +82,7 @@ const emptyRecurringForm = {
   notes: "",
 };
 
-export default function AdminBarangaySchedule() {
+export default function AdminBarangaySchedule({ readOnly = false }) {
   const [schedules, setSchedules] = useState([]);
   const [populationByBarangay, setPopulationByBarangay] = useState({});
   const [dentists, setDentists] = useState([]);
@@ -189,7 +189,13 @@ export default function AdminBarangaySchedule() {
   }, [schedules]);
 
   return (
+    <fieldset disabled={readOnly} style={{ display: "contents" }}>
     <div className="space-y-6">
+      {readOnly && (
+        <div className="bg-clay-500/10 border border-clay-500 text-forest-900 text-sm rounded-lg px-3 py-2">
+          Preview only — doctor accounts can view the barangay schedule but cannot make changes.
+        </div>
+      )}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h2 className="font-display text-2xl font-bold text-forest-950">Barangay Activity Schedule</h2>
@@ -562,5 +568,6 @@ export default function AdminBarangaySchedule() {
         </form>
       </Modal>
     </div>
+    </fieldset>
   );
 }

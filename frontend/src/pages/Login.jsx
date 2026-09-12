@@ -1,14 +1,21 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import RoleToggle from "../components/RoleToggle";
 
 export default function Login() {
   const { login } = useAuth();
   const navigate = useNavigate();
+  const [role, setRole] = useState("patient");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  function switchRole(next) {
+    setRole(next);
+    setError("");
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -16,7 +23,18 @@ export default function Login() {
     setBusy(true);
     try {
       const user = await login(email, password);
-      navigate(user.role === "admin" ? "/admin" : "/patient");
+      if (user.role !== role) {
+        setError(
+          user.role === "admin"
+            ? "This is an admin account. Please use the Admin Portal to log in."
+            : `This account is registered as a ${user.role}. Please switch to the "${
+                user.role === "doctor" ? "Doctor" : "Patient"
+              }" tab above.`
+        );
+        setBusy(false);
+        return;
+      }
+      navigate(user.role === "doctor" ? "/doctor" : "/patient");
     } catch (err) {
       setError(err.message);
     } finally {
@@ -32,8 +50,10 @@ export default function Login() {
           <span className="font-display font-bold text-forest-900">City Dental Section</span>
         </Link>
         <div className="bg-cream-50 border border-cream-200 rounded-2xl p-8">
-          <h1 className="font-display text-xl font-semibold text-forest-950 mb-1">Welcome back</h1>
-          <p className="text-sm text-forest-700 mb-6">Log in to manage your appointments and records.</p>
+          <h1 className="font-display text-xl font-semibold text-forest-950 mb-1">Log in</h1>
+          <p className="text-sm text-forest-700 mb-6">City Dental Section · City Health Office of Tayabas</p>
+
+          <RoleToggle value={role} onChange={switchRole} />
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
@@ -43,6 +63,7 @@ export default function Login() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                placeholder="juan@example.com"
                 className="mt-1 w-full rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm outline-none focus:border-forest-700"
               />
             </div>

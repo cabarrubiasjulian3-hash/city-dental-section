@@ -127,7 +127,7 @@ function TotalsRow({ label, totals }) {
   );
 }
 
-export default function AdminMonthlyReport() {
+export default function AdminMonthlyReport({ readOnly = false }) {
   const [tab, setTab] = useState("dentist");
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [dentistRows, setDentistRows] = useState([]);
@@ -194,7 +194,13 @@ export default function AdminMonthlyReport() {
   }
 
   return (
+    <fieldset disabled={readOnly} style={{ display: "contents" }}>
     <div className="space-y-6">
+      {readOnly && (
+        <div className="bg-clay-500/10 border border-clay-500 text-forest-900 text-sm rounded-lg px-3 py-2 print:hidden">
+          Preview only — doctor accounts can view the Monthly Report but cannot edit figures.
+        </div>
+      )}
       <div className="flex items-start justify-between flex-wrap gap-3 print:mb-4">
         <div>
           <h1 className="font-display text-2xl font-extrabold text-forest-950">
@@ -387,7 +393,7 @@ export default function AdminMonthlyReport() {
                       .slice()
                       .sort((a, b) => ["consultation_extraction", "ekonsulta", "dental_mission"].indexOf(a.activity_type) - ["consultation_extraction", "ekonsulta", "dental_mission"].indexOf(b.activity_type))
                       .map((r) => (
-                        <EditableRow key={r.id} row={r} rowLabel={ACTIVITY_LABELS[r.activity_type]} onSaveField={saveField} />
+                        <EditableRow key={r.id} row={r} rowLabel={ACTIVITY_LABELS[r.activity_type]} onSaveField={saveField} editable={!readOnly} />
                       ))}
                     <TotalsRow label="Subtotal" totals={dentistPerDentistTotals.find((d) => d.name === name)?.totals ?? emptyTotals()} />
                   </tbody>
@@ -511,5 +517,6 @@ export default function AdminMonthlyReport() {
       )}
       </div>
     </div>
+    </fieldset>
   );
 }

@@ -132,7 +132,54 @@ const claimImportedRow = db.prepare(
 //         "no dental records on file" until a visit puts them in the Excel
 //         sheet / gets recorded by the clinic — they aren't yet a "patient"
 //         of record just because they made an account.
+// Doctor sign up. Unlike a patient account, a doctor account needs two
+// separate approvals before it can ever log in:
+//   1. A valid, unused access code (an admin generates these — see
+//      routes/doctorAccess.js) — proves whoever is signing up was actually
+//      given permission to try.
+//   2. An admin explicitly confirming the new account afterwards — proves
+//      the person really is the doctor they claim to be, not just someone
+//      who obtained a leaked code.
+// The account is created right away (so admin has something to review and
+// approve), but /login refuses it until doctor_status = 'approved'.
+function registerDoctor(req, res) {
+  const { name, email, password, accessCode } = req.body;
+  if (!name || !email || !password || !accessCode) {
+    return res.status(400).json({ error: "Name, email, password, and access code are required." });
+  }
+  const existingEmail = db.prepare("SELECT id FROM users WHERE email = ?").get(email);
+  if (existingEmail) {
+    return res.status(409).json({ error: "An account with that email already exists." });
+  }
+
+  const code = db.prepare("SELECT * FROM access_codes WHERE code = ?").get(String(accessCode).trim());
+  if (!code || code.status !== "unused") {
+    return res.status(400).json({ error: "That access code is invalid or has already been used." });
+  }
+
+  const hash = bcrypt.hashSync(password, 10);
+  const info = db
+    .prepare(
+      `INSERT INTO users (role, name, email, password_hash, doctor_status, doctor_access_code)
+       VALUES ('doctor', ?, ?, ?, 'pending', ?)`
+    )
+    .run(name, email, hash, code.code);
+
+  db.prepare("UPDATE access_codes SET status = 'used', used_by = ?, used_at = datetime('now') WHERE id = ?").run(
+    info.lastInsertRowid,
+    code.id
+  );
+
+  res.status(201).json({
+    pending: true,
+    message:
+      "Your account was created using a valid access code, but a clinic administrator still needs to confirm you as a doctor before you can log in. You'll be able to log in once that's done.",
+  });
+}
+
 router.post("/register", (req, res) => {
+  if (req.body.role === "doctor") return registerDoctor(req, res);
+
   const { name, email, password, birthdate, sex, address, occupation, barangay, is_pregnant, is_pwd, surname, first_name, middle_name } = req.body;
   if (!name || !email || !password) {
     return res.status(400).json({ error: "Name, email, and password are required." });
@@ -241,6 +288,16 @@ router.post("/login", (req, res) => {
   const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
   if (!user || isUnclaimedImportedRow(user) || !bcrypt.compareSync(password, user.password_hash)) {
     return res.status(401).json({ error: "Invalid email or password." });
+  }
+  if (user.role === "doctor" && user.doctor_status !== "approved") {
+    if (user.doctor_status === "rejected") {
+      return res.status(403).json({
+        error: "Your access request was declined. Please contact the clinic administrator.",
+      });
+    }
+    return res.status(403).json({
+      error: "Your doctor account is awaiting admin confirmation. Please check back once it's been approved.",
+    });
   }
   absorbLateMatchingRecord(user);
   const token = signToken(user);

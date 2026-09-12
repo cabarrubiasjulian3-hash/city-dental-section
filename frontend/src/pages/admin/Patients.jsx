@@ -165,7 +165,7 @@ const NEW_PATIENT_BASIC_FIELDS = [
 // NEW_PATIENT_BASIC_FIELDS (POST /patients body) and the generic PATCH loop.
 const INITIAL_RECORD_FIELDS = ["initial_record_date", "initial_procedure", "initial_dentist", "initial_notes"];
 
-export default function AdminPatients() {
+export default function AdminPatients({ readOnly = false }) {
   const [patients, setPatients] = useState([]);
   const [selected, setSelected] = useState(null);
   const [showDetails, setShowDetails] = useState(true);
@@ -603,6 +603,12 @@ export default function AdminPatients() {
       `}</style>
 
       {/* ---------- STEP 1: header ---------- */}
+      {readOnly && (
+        <div className="bg-clay-500/10 border border-clay-500 text-forest-900 text-sm rounded-lg px-3 py-2">
+          Preview only — doctor accounts can view patient records and add a new patient, but cannot edit or delete
+          existing records.
+        </div>
+      )}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h2 className="font-display text-2xl font-bold text-forest-950">Patient Records</h2>
@@ -625,16 +631,18 @@ export default function AdminPatients() {
             >
               🖨 Print
             </button>
-            <label className="patient-action bg-cream-50 border border-forest-900 text-forest-900 cursor-pointer">
-              {importing ? "Importing…" : "⬆ Import from Excel"}
-              <input
-                type="file"
-                accept=".xlsx"
-                onChange={importExcel}
-                disabled={importing}
-                className="hidden"
-              />
-            </label>
+            <fieldset disabled={readOnly} style={{ display: "contents" }}>
+              <label className="patient-action bg-cream-50 border border-forest-900 text-forest-900 cursor-pointer">
+                {importing ? "Importing…" : "⬆ Import from Excel"}
+                <input
+                  type="file"
+                  accept=".xlsx"
+                  onChange={importExcel}
+                  disabled={importing}
+                  className="hidden"
+                />
+              </label>
+            </fieldset>
             <button
               onClick={exportExcel}
               disabled={exporting}

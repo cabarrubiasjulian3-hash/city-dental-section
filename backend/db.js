@@ -11,7 +11,7 @@ db.pragma("foreign_keys = ON");
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  role TEXT NOT NULL CHECK(role IN ('patient','admin')),
+  role TEXT NOT NULL CHECK(role IN ('patient','admin','doctor')),
   name TEXT NOT NULL,
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
@@ -94,6 +94,69 @@ for (const [col, type] of Object.entries(treatmentRecordColumns)) {
     db.exec(`ALTER TABLE users ADD COLUMN ${col} ${type}`);
   }
 }
+
+// Doctor accounts: signed up with an admin-issued access code, but stay
+// locked out of logging in until an admin explicitly confirms them (see
+// routes/doctorAccess.js). doctor_status is only meaningful for role='doctor'
+// rows — 'pending' until reviewed, then 'approved' or 'rejected'.
+const doctorColumns = {
+  doctor_status: "TEXT",
+  doctor_access_code: "TEXT",
+  doctor_approved_by: "INTEGER",
+  doctor_approved_at: "TEXT",
+};
+for (const [col, type] of Object.entries(doctorColumns)) {
+  if (!userColumns.includes(col)) {
+    db.exec(`ALTER TABLE users ADD COLUMN ${col} ${type}`);
+  }
+}
+
+// The `role` column's CHECK constraint was created before the 'doctor' role
+// existed. SQLite can't ALTER a CHECK constraint in place, so rebuild the
+// table (preserving every column and the data in it) the first time this
+// runs against an older database file.
+const usersTableSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").get()?.sql || "";
+if (usersTableSql && !usersTableSql.includes("'doctor'")) {
+  const cols = db.prepare("PRAGMA table_info(users)").all();
+  const colDefs = cols.map((c) => {
+    if (c.name === "id") return "id INTEGER PRIMARY KEY AUTOINCREMENT";
+    if (c.name === "role") return "role TEXT NOT NULL CHECK(role IN ('patient','admin','doctor'))";
+    let def = `${c.name} ${c.type}`;
+    if (c.name === "email") def += " UNIQUE";
+    if (c.notnull) def += " NOT NULL";
+    if (c.dflt_value !== null && c.dflt_value !== undefined) {
+      // PRAGMA table_info reports expression defaults (e.g. a function call
+      // like datetime('now')) without the wrapping parens SQLite's own DDL
+      // requires around a non-literal default — add them back, but not for
+      // simple literals (quoted strings, numbers, NULL) which don't need
+      // and shouldn't get extra parens.
+      const isSimpleLiteral = /^(-?\d+(\.\d+)?|'([^']|'')*'|NULL)$/i.test(c.dflt_value);
+      def += isSimpleLiteral ? ` DEFAULT ${c.dflt_value}` : ` DEFAULT (${c.dflt_value})`;
+    }
+    return def;
+  });
+  const colNames = cols.map((c) => c.name).join(", ");
+  db.exec(`CREATE TABLE users_new (${colDefs.join(", ")})`);
+  db.exec(`INSERT INTO users_new (${colNames}) SELECT ${colNames} FROM users`);
+  db.exec("DROP TABLE users");
+  db.exec("ALTER TABLE users_new RENAME TO users");
+}
+
+// Access codes an admin generates for a doctor to use at signup. One code
+// is meant for one doctor — it's marked 'used' the moment a doctor account
+// is created with it (see /auth/register), independent of whether that
+// doctor is later approved or rejected.
+db.exec(`
+CREATE TABLE IF NOT EXISTS access_codes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'unused' CHECK(status IN ('unused','used','revoked')),
+  created_by INTEGER REFERENCES users(id),
+  used_by INTEGER REFERENCES users(id),
+  used_at TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+`);
 
 db.exec(`
 

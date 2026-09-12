@@ -26,6 +26,11 @@ export function AuthProvider({ children }) {
 
   async function register(payload) {
     const data = await api.post("/auth/register", payload);
+    // A doctor sign-up doesn't get logged in immediately — the account
+    // still needs admin confirmation, so the backend replies with
+    // { pending: true, message } instead of a token/user. Don't try to
+    // start a session in that case.
+    if (data.pending) return data;
     localStorage.setItem("cds_token", data.token);
     localStorage.setItem("cds_user", JSON.stringify(data.user));
     setUser(data.user);

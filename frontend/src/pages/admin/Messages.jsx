@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api";
 
-export default function AdminMessages() {
+export default function AdminMessages({ readOnly = false }) {
   const [threads, setThreads] = useState([]);
   const [selected, setSelected] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -70,15 +70,17 @@ export default function AdminMessages() {
                 ))}
                 <div ref={bottomRef} />
               </div>
-              <form onSubmit={send} className="flex items-center gap-3 border-t border-cream-200 p-4">
-                <input
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                  placeholder={`Message ${selected.name}…`}
-                  className="flex-1 rounded-full border border-cream-200 bg-cream-100 px-4 py-2 text-sm outline-none focus:border-forest-700"
-                />
-                <button className="w-10 h-10 rounded-full bg-brand-900 text-brand-50 flex items-center justify-center">➤</button>
-              </form>
+              <fieldset disabled={readOnly} style={{ display: "contents" }}>
+                <form onSubmit={send} className="flex items-center gap-3 border-t border-cream-200 p-4">
+                  <input
+                    value={text}
+                    onChange={(e) => setText(e.target.value)}
+                    placeholder={readOnly ? "Doctor accounts can view messages but cannot send replies." : `Message ${selected.name}…`}
+                    className="flex-1 rounded-full border border-cream-200 bg-cream-100 px-4 py-2 text-sm outline-none focus:border-forest-700 disabled:opacity-60"
+                  />
+                  <button className="w-10 h-10 rounded-full bg-brand-900 text-brand-50 flex items-center justify-center disabled:opacity-60">➤</button>
+                </form>
+              </fieldset>
             </>
           ) : (
             <p className="m-auto text-sm text-forest-700">Select a conversation to view messages.</p>

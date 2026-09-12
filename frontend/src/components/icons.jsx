@@ -66,6 +66,27 @@ export function IconStaff({ className = "w-[18px] h-[18px]" }) {
   );
 }
 
+// Used on the Patient/Doctor role toggle in the login and sign-up modals.
+export function IconPatient({ className = "w-[18px] h-[18px]" }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="8" r="3.5" />
+      <path d="M5 20c0-3.5 3-6 7-6s7 2.5 7 6" />
+    </svg>
+  );
+}
+
+export function IconDoctor({ className = "w-[18px] h-[18px]" }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 3v4a4 4 0 0 0 8 0V3" />
+      <path d="M8 4H6.5A1.5 1.5 0 0 0 5 5.5V10a7 7 0 0 0 7 7 7 7 0 0 0 7-7V5.5A1.5 1.5 0 0 0 17.5 4H16" />
+      <circle cx="18.5" cy="16.5" r="3" />
+      <path d="M18.5 15.2v2.6M17.2 16.5h2.6" />
+    </svg>
+  );
+}
+
 export function IconSearch({ className = "w-[18px] h-[18px]" }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
