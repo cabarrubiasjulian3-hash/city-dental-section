@@ -201,9 +201,22 @@ router.get("/stats", (req, res) => {
   // by Patient Management and Messages (see lib/doctorMatch.js).
   let myPatientCount = null;
   let myRecentRecords = null;
+  let myDoctorNameDebug = null;
+  let allDentistValuesDebug = null;
   if (req.user.role === "doctor") {
     const myPatientIds = getDoctorPatientIds(db, req.user.name);
     myPatientCount = myPatientIds.size;
+    // Temporary debug aid: shows exactly what name string is being matched
+    // against, wrapped in « » so trailing/leading/invisible whitespace is
+    // visible — helps tell apart "no dental_records use this doctor's name
+    // yet" from "the name being compared doesn't look like what you expect".
+    myDoctorNameDebug = `«${req.user.name}»`;
+    allDentistValuesDebug = db
+      .prepare(
+        `SELECT DISTINCT dentist FROM dental_records WHERE dentist IS NOT NULL AND dentist != '' ORDER BY dentist`
+      )
+      .all()
+      .map((r) => `«${r.dentist}»`);
     myRecentRecords = myPatientIds.size
       ? db
           .prepare(
@@ -220,6 +233,8 @@ router.get("/stats", (req, res) => {
   res.json({
     myPatientCount,
     myRecentRecords,
+    myDoctorNameDebug,
+    allDentistValuesDebug,
     totalPatients,
     newPatientsThisMonth,
     recordsThisMonth,

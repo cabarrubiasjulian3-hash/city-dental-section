@@ -96,6 +96,16 @@ export default function AdminDashboard({ readOnly = false }) {
                 <EmptyState>
                   No patients found under your name yet. Ask the admin to confirm your name matches the "dentist"
                   entered on their records.
+                  {stats.myDoctorNameDebug && (
+                    <div className="mt-2 text-xs font-mono text-forest-600">
+                      Matching against your account name: {stats.myDoctorNameDebug}
+                    </div>
+                  )}
+                  {stats.allDentistValuesDebug?.length > 0 && (
+                    <div className="mt-2 text-xs font-mono text-forest-600">
+                      "dentist" values currently on file: {stats.allDentistValuesDebug.join(", ")}
+                    </div>
+                  )}
                 </EmptyState>
               )}
             </div>

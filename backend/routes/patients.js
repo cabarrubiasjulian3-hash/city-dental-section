@@ -4,6 +4,7 @@ import db from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { calcAge } from "../lib/age.js";
 import { importWorkbookBuffer } from "../lib/importExcel.js";
+import { getDoctorPatientIds } from "../lib/doctorMatch.js";
 import ExcelJS from "exceljs";
 import bcrypt from "bcryptjs";
 
@@ -34,7 +35,12 @@ function withAge(patient) {
 // OUT of this list. They still have a normal, working login — they're just
 // not shown here yet, because they aren't considered a patient of record
 // until the clinic logs their first visit.
-router.get("/", requireRole("admin"), (req, res) => {
+//
+// Doctor: same list, but narrowed down to only the patients whose most
+// recent dental records name this doctor as the attending dentist (see
+// lib/doctorMatch.js) — a doctor's Patient Management only ever shows their
+// own patients, never another doctor's.
+router.get("/", requireRole("admin", "doctor"), (req, res) => {
   const rows = db
     .prepare(
       `SELECT u.id, u.name, u.email, u.birthdate, u.sex, u.address, u.occupation, u.barangay,
@@ -60,14 +66,20 @@ router.get("/", requireRole("admin"), (req, res) => {
        ORDER BY u.created_at DESC`
     )
     .all();
-  res.json(rows.map(withAge));
+
+  let result = rows.map(withAge);
+  if (req.user.role === "doctor") {
+    const myPatientIds = getDoctorPatientIds(db, req.user.name);
+    result = result.filter((p) => myPatientIds.has(p.id));
+  }
+  res.json(result);
 });
 
 // Admin: check kung may existing na katulad na patient (name + barangay + age).
 // MAHALAGA: ito ay dapat MAUNA sa "/:id" route sa ibaba — kung hindi,
 // aakalain ng Express na "check-duplicate" ay isang :id value at hindi na
 // mapupunta rito ang request.
-router.get("/check-duplicate", requireRole("admin"), (req, res) => {
+router.get("/check-duplicate", requireRole("admin", "doctor"), (req, res) => {
   const { name, barangay, age } = req.query;
   if (!name) return res.json({ matches: [] });
 
@@ -310,10 +322,14 @@ router.patch("/:id", requireRole("admin"), (req, res) => {
   res.json(withAge(patient));
 });
 
-// Get a single patient profile (self, or admin viewing anyone)
+// Get a single patient profile (self, or admin viewing anyone, or a doctor
+// viewing one of their own patients — see lib/doctorMatch.js).
 router.get("/:id", (req, res) => {
   const id = Number(req.params.id);
-  if (req.user.role !== "admin" && req.user.id !== id) {
+  const isOwnAccount = req.user.id === id;
+  const isAdmin = req.user.role === "admin";
+  const isTheirPatient = req.user.role === "doctor" && getDoctorPatientIds(db, req.user.name).has(id);
+  if (!isAdmin && !isOwnAccount && !isTheirPatient) {
     return res.status(403).json({ error: "Not authorized." });
   }
   const patient = db

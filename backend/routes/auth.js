@@ -20,6 +20,20 @@ function norm(s) {
   return String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+// Address-specific normalization, on top of norm() above. The "New Patient
+// Record" form (admin/Patients.jsx) always prefixes the street address with
+// "Tayabas City, " (see CITY_PREFIX there), but a patient's own Signup form
+// saves the raw address with no such prefix — so the exact same real-world
+// address ends up as two different strings depending on which form entered
+// it, and used to make the address side of samePerson() below fail to agree
+// even when everything else about the record matched. Stripping the prefix
+// here, on both sides, means it no longer matters which form the address
+// came from.
+const CITY_PREFIX_RE = /^tayabas city,\s*/i;
+function normAddress(s) {
+  return norm(s).replace(CITY_PREFIX_RE, "");
+}
+
 // Rows created by the Excel importer get a placeholder @imported.local email
 // and never had a real password set — they're "on file" but nobody has
 // claimed them with a real login yet.
@@ -72,7 +86,7 @@ const deleteDuplicateUser = db.prepare("DELETE FROM users WHERE id = ?");
 // doesn't have every field filled in.
 function samePerson(a, b) {
   const birthdateAgrees = a.birthdate && b.birthdate && a.birthdate === b.birthdate;
-  const addressAgrees = a.address && b.address && norm(a.address) === norm(b.address);
+  const addressAgrees = a.address && b.address && normAddress(a.address) === normAddress(b.address);
   return Boolean(birthdateAgrees || addressAgrees);
 }
 
