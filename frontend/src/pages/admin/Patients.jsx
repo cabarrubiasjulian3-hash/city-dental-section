@@ -188,10 +188,13 @@ export default function AdminPatients({ readOnly = false }) {
   const [selected, setSelected] = useState(null);
   const [showDetails, setShowDetails] = useState(true);
   // Clicking a patient row opens the Service History popup automatically.
-  // From inside that popup, two green buttons open the Individual Patient
-  // Treatment Record popup and the Patient Summary popup — all three are
-  // real <Modal> popups (same component the Log in / Sign up popups use),
-  // so clicking anywhere outside a popup closes it automatically.
+  // Inside that popup, two green buttons ("Individual Patient Treatment
+  // Record" and "Patient Summary") open their OWN separate popup on top —
+  // the History popup stays open underneath, it's a real second popup, not
+  // content swapped into the same box. All three are independent <Modal>
+  // popups (same component the Log in / Sign up popups use); clicking
+  // outside the topmost open popup closes just that one, revealing
+  // whatever was open underneath it.
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showTreatmentModal, setShowTreatmentModal] = useState(false);
   const [showSummaryModal, setShowSummaryModal] = useState(false);
@@ -1277,10 +1280,11 @@ export default function AdminPatients({ readOnly = false }) {
 
       {/* ---------- Service History popup ----------
           Opens automatically when a patient row is clicked. Shows a quick
-          rundown of their past visits, plus two green buttons that each
-          open their own popup (Individual Patient Treatment Record, and
-          Patient Summary) — same <Modal> component as Log in / Sign up, so
-          clicking outside any of these closes it. ---------- */}
+          rundown of their past visits, the Add Records form, and two green
+          buttons at the bottom. Clicking either button closes this popup
+          and opens its own separate popup (Individual Patient Treatment
+          Record, or Patient Summary) — same <Modal> component as Log in /
+          Sign up, so clicking outside any of these popups closes it. ---------- */}
       <Modal isOpen={showHistoryModal && !!selected} onClose={() => setShowHistoryModal(false)} size="lg">
         {selected && (
           <div className="space-y-4">
@@ -1366,20 +1370,14 @@ export default function AdminPatients({ readOnly = false }) {
             <div className="grid grid-cols-2 gap-3 pt-2 border-t border-cream-200">
               <button
                 type="button"
-                onClick={() => {
-                  setShowHistoryModal(false);
-                  setShowTreatmentModal(true);
-                }}
+                onClick={() => setShowTreatmentModal(true)}
                 className="rounded-full bg-forest-900 text-cream-50 text-sm font-semibold px-4 py-3 hover:bg-forest-800"
               >
                 Individual Patient Treatment Record
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setShowHistoryModal(false);
-                  setShowSummaryModal(true);
-                }}
+                onClick={() => setShowSummaryModal(true)}
                 className="rounded-full bg-forest-900 text-cream-50 text-sm font-semibold px-4 py-3 hover:bg-forest-800"
               >
                 Patient Summary
