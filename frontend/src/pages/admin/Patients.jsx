@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { api } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
 import { Card, EmptyState } from "../../components/ui";
+import Modal from "../../components/Modal";
 import ToothChart from "../../components/ToothChart";
 import EditableCell, { SEX_OPTIONS } from "../../components/EditableCell";
 import { SERVICE_OPTIONS, visitsRequiredFor, computeRecordStatuses } from "../../lib/services";
@@ -186,6 +187,14 @@ export default function AdminPatients({ readOnly = false }) {
   const [patients, setPatients] = useState([]);
   const [selected, setSelected] = useState(null);
   const [showDetails, setShowDetails] = useState(true);
+  // Clicking a patient row opens the Service History popup automatically.
+  // From inside that popup, two green buttons open the Individual Patient
+  // Treatment Record popup and the Patient Summary popup — all three are
+  // real <Modal> popups (same component the Log in / Sign up popups use),
+  // so clicking anywhere outside a popup closes it automatically.
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [showTreatmentModal, setShowTreatmentModal] = useState(false);
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [records, setRecords] = useState([]);
   const [dentists, setDentists] = useState([]);
   const [newRecord, setNewRecord] = useState({ record_date: "", procedure: "", dentist: "", notes: "" });
@@ -295,6 +304,11 @@ export default function AdminPatients({ readOnly = false }) {
   async function openPatient(p) {
     setShowDetails(true);
     setDuplicateWarning(null);
+    // Opens the Service History popup right away; the Treatment Record and
+    // Summary popups start closed until their green buttons are clicked.
+    setShowHistoryModal(true);
+    setShowTreatmentModal(false);
+    setShowSummaryModal(false);
     try {
       const full = await api.get(`/patients/${p.id}`);
       setSelected(full);
@@ -1160,157 +1174,231 @@ export default function AdminPatients({ readOnly = false }) {
         </div>
       )}
 
-      {/* ---------- STEP 4: 2-column grid — list (left) + summary/tooth chart (right) ---------- */}
-      {/* items-stretch (grid's default) makes both cards the same height —
-          whichever column has less content just gets a taller card, so the
-          two boxes line up evenly side by side. */}
-      <div className="grid lg:grid-cols-2 gap-5 items-stretch">
-        <div id="printable-patient-table" className="h-full">
-          <Card
-            className="h-full flex flex-col"
-            title={`All Patients — ${filtered.length}${search ? ` of ${patients.length}` : ""} records`}
-            action={
-              <div className="flex items-center gap-2 print:hidden">
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search name or barangay"
-                  className="rounded-full bg-cream-100 border border-cream-300 text-forest-950 text-xs px-3 py-1.5 w-48 focus:outline-none focus:border-forest-700"
-                />
-              </div>
-            }
-          >
-            {rowError && <p className="text-xs text-red-600 mb-2 print:hidden">{rowError}</p>}
+      {/* ---------- STEP 4: patient list (full width) ---------- */}
+      <div id="printable-patient-table">
+        <Card
+          title={`All Patients — ${filtered.length}${search ? ` of ${patients.length}` : ""} records`}
+          action={
+            <div className="flex items-center gap-2 print:hidden">
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search name or barangay"
+                className="rounded-full bg-cream-100 border border-cream-300 text-forest-950 text-xs px-3 py-1.5 w-48 focus:outline-none focus:border-forest-700"
+              />
+            </div>
+          }
+        >
+          {rowError && <p className="text-xs text-red-600 mb-2 print:hidden">{rowError}</p>}
 
-            {duplicateWarning && (
-              <div className="bg-red-50 border border-red-300 text-red-700 text-sm rounded-lg px-3 py-2 mb-2 print:hidden">
-                ⚠ May kahalintulad nang record: <strong>{duplicateWarning[0].name}</strong>
-                {duplicateWarning[0].barangay ? ` (${duplicateWarning[0].barangay})` : ""}.{" "}
-                <button
-                  className="underline ml-2"
-                  onClick={() => {
-                    openPatient(duplicateWarning[0]);
-                    setDuplicateWarning(null);
-                  }}
-                >
-                  Buksan ang existing record
-                </button>
-                {" · "}
-                <button className="underline" onClick={() => setDuplicateWarning(null)}>
-                  Ituloy pa rin
-                </button>
-              </div>
-            )}
+          {duplicateWarning && (
+            <div className="bg-red-50 border border-red-300 text-red-700 text-sm rounded-lg px-3 py-2 mb-2 print:hidden">
+              ⚠ May kahalintulad nang record: <strong>{duplicateWarning[0].name}</strong>
+              {duplicateWarning[0].barangay ? ` (${duplicateWarning[0].barangay})` : ""}.{" "}
+              <button
+                className="underline ml-2"
+                onClick={() => {
+                  openPatient(duplicateWarning[0]);
+                  setDuplicateWarning(null);
+                }}
+              >
+                Buksan ang existing record
+              </button>
+              {" · "}
+              <button className="underline" onClick={() => setDuplicateWarning(null)}>
+                Ituloy pa rin
+              </button>
+            </div>
+          )}
 
-            {filtered.length ? (
-              <div className="max-h-[430px] overflow-y-auto">
-                <table className="w-full text-sm min-w-0]">
-                  <thead className="sticky top-0 bg-cream-50 z-10">
-                    <tr className="text-left text-forest-700 uppercase text-xs">
-                      <th className="py-2 px-2">Patient</th>
-                      <th className="py-2 px-2">Brgy.</th>
-                      <th className="py-2 px-2">Age/Sex</th>
-                      <th className="py-2 px-2 text-center">DMFT</th>
-                      <th className="py-2 px-2">Dentist</th>
-                      <th className="py-2 px-2">Status</th>
-                      <th className="py-2 px-2 print:hidden"></th>
+          {filtered.length ? (
+            <div className="max-h-[430px] overflow-y-auto">
+              <table className="w-full text-sm min-w-0]">
+                <thead className="sticky top-0 bg-cream-50 z-10">
+                  <tr className="text-left text-forest-700 uppercase text-xs">
+                    <th className="py-2 px-2">Patient</th>
+                    <th className="py-2 px-2">Brgy.</th>
+                    <th className="py-2 px-2">Age/Sex</th>
+                    <th className="py-2 px-2 text-center">DMFT</th>
+                    <th className="py-2 px-2">Dentist</th>
+                    <th className="py-2 px-2">Status</th>
+                    <th className="py-2 px-2 print:hidden"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((p) => (
+                    <tr
+                      key={p.id}
+                      className={`border-t border-cream-200 align-top cursor-pointer ${
+                        selected?.id === p.id ? "bg-cream-100" : ""
+                      }`}
+                      onClick={() => openPatient(p)}
+                    >
+                      <td className="px-2 py-2">
+                        <p className="font-semibold text-forest-950">{p.name}</p>
+                        <p className="text-xs text-forest-500">TC-{String(p.id).padStart(4, "0")}</p>
+                      </td>
+                      <td className="px-2 py-2 text-forest-700">{p.barangay || "—"}</td>
+                      <td className="px-2 py-2 text-forest-700">
+                        {p.age ?? "—"}/{p.sex ? p.sex[0] : "—"}
+                      </td>
+                      <td className="px-2 py-2 text-center text-forest-700">{p.visit_count || 0}</td>
+                      <td className="px-2 py-2 text-forest-700">{p.latest_dentist || "—"}</td>
+                      <td className="px-2 py-2">
+                        <span
+                          className={`inline-block text-xs font-semibold rounded-full px-3 py-1 whitespace-nowrap ${
+                            STATUS_STYLES[statusFor(p)]
+                          }`}
+                        >
+                          {statusFor(p)}
+                        </span>
+                      </td>
+                      <td className="px-2 py-2 text-right whitespace-nowrap print:hidden">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteRow(p);
+                          }}
+                          className="text-xs text-red-600 underline"
+                        >
+                          Delete
+                        </button>
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {filtered.map((p) => (
-                      <tr
-                        key={p.id}
-                        className={`border-t border-cream-200 align-top cursor-pointer ${
-                          selected?.id === p.id ? "bg-cream-100" : ""
-                        }`}
-                        onClick={() => openPatient(p)}
-                      >
-                        <td className="px-2 py-2">
-                          <p className="font-semibold text-forest-950">{p.name}</p>
-                          <p className="text-xs text-forest-500">TC-{String(p.id).padStart(4, "0")}</p>
-                        </td>
-                        <td className="px-2 py-2 text-forest-700">{p.barangay || "—"}</td>
-                        <td className="px-2 py-2 text-forest-700">
-                          {p.age ?? "—"}/{p.sex ? p.sex[0] : "—"}
-                        </td>
-                        <td className="px-2 py-2 text-center text-forest-700">{p.visit_count || 0}</td>
-                        <td className="px-2 py-2 text-forest-700">{p.latest_dentist || "—"}</td>
-                        <td className="px-2 py-2">
-                          <span
-                            className={`inline-block text-xs font-semibold rounded-full px-3 py-1 whitespace-nowrap ${
-                              STATUS_STYLES[statusFor(p)]
-                            }`}
-                          >
-                            {statusFor(p)}
-                          </span>
-                        </td>
-                        <td className="px-2 py-2 text-right whitespace-nowrap print:hidden">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              deleteRow(p);
-                            }}
-                            className="text-xs text-red-600 underline"
-                          >
-                            Delete
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <EmptyState>{search ? "No patients match that search." : "No registered patients yet."}</EmptyState>
-            )}
-          </Card>
-        </div>
-        <Card className="print:hidden h-full flex flex-col">
-          {selected ? (
-            <div className="space-y-5">
-              <div>
-                <EditableCell
-                  value={selected.name}
-                  placeholder="Patient name"
-                  onSave={(v) => savePatientField(selected, "name", v)}
-                  className="font-display text-xl font-bold text-forest-950"
-                />
-                <p className="text-sm text-forest-500 mt-0.5">
-                  TC-{String(selected.id).padStart(4, "0")}
-                  {records[0]?.dentist ? ` · Dr. ${records[0].dentist}` : ""}
-                </p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-cream-100 rounded-xl px-5 py-4">
-                  <p className="text-xs uppercase tracking-wide text-forest-700">Barangay</p>
-                  <EditableCell
-                    value={selected.barangay}
-                    placeholder="Barangay"
-                    onSave={(v) => savePatientField(selected, "barangay", v)}
-                    className="font-semibold text-forest-950 text-lg"
-                  />
-                </div>
-                <div className="bg-cream-100 rounded-xl px-5 py-4">
-                  <p className="text-xs uppercase tracking-wide text-forest-700">Last visit</p>
-                  <p className="font-semibold text-forest-950 text-lg">
-                    {records[0]?.record_date ? new Date(records[0].record_date).toLocaleDateString() : "—"}
-                  </p>
-                </div>
-              </div>
-
-              <ToothChart patientId={selected.id} isAdmin />
+                  ))}
+                </tbody>
+              </table>
             </div>
           ) : (
-            <EmptyState>Click a patient on the left to view their chart.</EmptyState>
+            <EmptyState>{search ? "No patients match that search." : "No registered patients yet."}</EmptyState>
           )}
         </Card>
       </div>
 
-      {/* ---------- STEP 5/6: full Individual Patient Treatment Record ---------- */}
-      <Card title="Individual Patient Treatment Record" className="print:hidden">
-        {selected ? (
+      {/* ---------- Service History popup ----------
+          Opens automatically when a patient row is clicked. Shows a quick
+          rundown of their past visits, plus two green buttons that each
+          open their own popup (Individual Patient Treatment Record, and
+          Patient Summary) — same <Modal> component as Log in / Sign up, so
+          clicking outside any of these closes it. ---------- */}
+      <Modal isOpen={showHistoryModal && !!selected} onClose={() => setShowHistoryModal(false)} size="lg">
+        {selected && (
           <div className="space-y-4">
+            <div>
+              <h3 className="font-display text-lg font-bold text-forest-950">{selected.name}</h3>
+              <p className="text-sm text-forest-500 mt-0.5">
+                TC-{String(selected.id).padStart(4, "0")} · Service History
+              </p>
+            </div>
+
+            {records.length ? (
+              <div className="max-h-[320px] overflow-y-auto space-y-2">
+                {records.map((r) => (
+                  <div key={r.id} className="bg-cream-100 rounded-lg px-4 py-3">
+                    <p className="text-sm font-semibold text-forest-950">
+                      {r.record_date ? new Date(r.record_date).toLocaleDateString() : "—"} · {r.procedure || "—"}
+                    </p>
+                    <p className="text-xs text-forest-700 mt-0.5">
+                      {r.dentist ? `Dr. ${r.dentist}` : "No dentist on file"}
+                      {r.notes ? ` · ${r.notes}` : ""}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState>No service history yet for this patient.</EmptyState>
+            )}
+
+            {/* Add Records — same form/handler as inside the Treatment
+                Record popup, so a new visit logged here shows up there too. */}
+            <div className="add-record-section border-t border-cream-200 pt-3">
+              <h3 className="text-sm font-semibold text-forest-950">Add Records</h3>
+              <p className="text-xs text-forest-700 mt-0.5">
+                For a returning patient, simply add a new visit, procedure, notes, and vital signs.
+              </p>
+            </div>
+
+            <form onSubmit={addServiceRecord} className="grid grid-cols-2 gap-2">
+              <input
+                type="date"
+                required
+                value={newRecord.record_date}
+                onChange={(e) => setNewRecord((f) => ({ ...f, record_date: e.target.value }))}
+                className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
+              />
+              <select
+                required
+                value={newRecord.procedure}
+                onChange={(e) => setNewRecord((f) => ({ ...f, procedure: e.target.value }))}
+                className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
+              >
+                {SERVICE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value} disabled={o.value === ""}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={newRecord.dentist}
+                onChange={(e) => setNewRecord((f) => ({ ...f, dentist: e.target.value }))}
+                className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
+              >
+                {dentistOptions(newRecord.dentist).map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+              <input
+                placeholder="Notes"
+                value={newRecord.notes}
+                onChange={(e) => setNewRecord((f) => ({ ...f, notes: e.target.value }))}
+                className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
+              />
+              <button
+                disabled={addingRecord}
+                className="col-span-2 bg-forest-900 text-cream-50 text-sm font-semibold rounded-full py-2 hover:bg-forest-800 disabled:opacity-60"
+              >
+                {addingRecord ? "Adding…" : "+ Add service record"}
+              </button>
+            </form>
+
+            <div className="grid grid-cols-2 gap-3 pt-2 border-t border-cream-200">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowHistoryModal(false);
+                  setShowTreatmentModal(true);
+                }}
+                className="rounded-full bg-forest-900 text-cream-50 text-sm font-semibold px-4 py-3 hover:bg-forest-800"
+              >
+                Individual Patient Treatment Record
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowHistoryModal(false);
+                  setShowSummaryModal(true);
+                }}
+                className="rounded-full bg-forest-900 text-cream-50 text-sm font-semibold px-4 py-3 hover:bg-forest-800"
+              >
+                Patient Summary
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* ---------- Individual Patient Treatment Record popup ---------- */}
+      <Modal isOpen={showTreatmentModal && !!selected} onClose={() => setShowTreatmentModal(false)} size="xl">
+        {selected && (
+          <div className="space-y-4">
+            <div>
+              <h3 className="font-display text-lg font-bold text-forest-950">Individual Patient Treatment Record</h3>
+              <p className="text-sm text-forest-500 mt-0.5">
+                {selected.name} · TC-{String(selected.id).padStart(4, "0")}
+              </p>
+            </div>
             {showDetails && (
               <div className="space-y-3">
                 <p className="text-xs font-semibold uppercase tracking-wide text-forest-700">
@@ -1810,10 +1898,48 @@ export default function AdminPatients({ readOnly = false }) {
               </button>
             </form>
           </div>
-        ) : (
-          <EmptyState>Click a patient on the left to view and log services applied.</EmptyState>
         )}
-      </Card>
+      </Modal>
+
+      {/* ---------- Patient Summary popup ---------- */}
+      <Modal isOpen={showSummaryModal && !!selected} onClose={() => setShowSummaryModal(false)} size="lg">
+        {selected && (
+          <div className="space-y-5">
+            <div>
+              <EditableCell
+                value={selected.name}
+                placeholder="Patient name"
+                onSave={(v) => savePatientField(selected, "name", v)}
+                className="font-display text-xl font-bold text-forest-950"
+              />
+              <p className="text-sm text-forest-500 mt-0.5">
+                TC-{String(selected.id).padStart(4, "0")}
+                {records[0]?.dentist ? ` · Dr. ${records[0].dentist}` : ""}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-cream-100 rounded-xl px-5 py-4">
+                <p className="text-xs uppercase tracking-wide text-forest-700">Barangay</p>
+                <EditableCell
+                  value={selected.barangay}
+                  placeholder="Barangay"
+                  onSave={(v) => savePatientField(selected, "barangay", v)}
+                  className="font-semibold text-forest-950 text-lg"
+                />
+              </div>
+              <div className="bg-cream-100 rounded-xl px-5 py-4">
+                <p className="text-xs uppercase tracking-wide text-forest-700">Last visit</p>
+                <p className="font-semibold text-forest-950 text-lg">
+                  {records[0]?.record_date ? new Date(records[0].record_date).toLocaleDateString() : "—"}
+                </p>
+              </div>
+            </div>
+
+            <ToothChart patientId={selected.id} isAdmin />
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
