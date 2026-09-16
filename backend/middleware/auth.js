@@ -15,10 +15,18 @@ export function requireAuth(req, res, next) {
   }
 }
 
-export function requireRole(role) {
+// NOTE: there used to be a second, older copy of this function further down
+// in this file that only accepted a single role (function requireRole(role)).
+// Having two `export function requireRole` declarations in the same file
+// meant the OLDER single-role one was the one actually being used -- so any
+// route written as requireRole("admin", "doctor") silently behaved as
+// requireRole("admin") only, rejecting every doctor request with
+// "Requires admin role.". That old duplicate has been removed. This is now
+// the ONLY requireRole in the file.
+export function requireRole(...roles) {
   return (req, res, next) => {
-    if (req.user.role !== role) {
-      return res.status(403).json({ error: `Requires ${role} role.` });
+    if (!roles.includes(req.user.role)) {
+      return res.status(403).json({ error: `Requires ${roles.join(" or ")} role.` });
     }
     next();
   };

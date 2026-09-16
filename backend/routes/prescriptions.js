@@ -1,14 +1,23 @@
 import { Router } from "express";
 import db from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
+import { getDoctorPatientIds } from "../lib/doctorMatch.js";
 
 const router = Router();
 router.use(requireAuth);
 
+// Same fix as dentalRecords.js: a doctor was falling through to req.user.id
+// (their own account id, not a patient's) instead of using the requested
+// ?patient_id=, so this always came back empty for a doctor no matter whose
+// profile was open.
 router.get("/", (req, res) => {
-  const patientId = req.user.role === "admin" ? Number(req.query.patient_id) : req.user.id;
-  if (req.user.role === "admin" && !patientId) {
-    return res.status(400).json({ error: "patient_id query param required for admin." });
+  const isStaff = req.user.role === "admin" || req.user.role === "doctor";
+  const patientId = isStaff ? Number(req.query.patient_id) : req.user.id;
+  if (isStaff && !patientId) {
+    return res.status(400).json({ error: "patient_id query param required." });
+  }
+  if (req.user.role === "doctor" && !getDoctorPatientIds(db, req.user.name).has(patientId)) {
+    return res.status(403).json({ error: "You can only view prescriptions for your own patients." });
   }
   const rows = db
     .prepare(`SELECT * FROM prescriptions WHERE patient_id = ? ORDER BY prescribed_at DESC`)

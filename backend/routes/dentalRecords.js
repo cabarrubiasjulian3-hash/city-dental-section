@@ -3,15 +3,26 @@ import db from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { SERVICES } from "../lib/services.js";
 import { applyServiceRecord, revertServiceRecord } from "../lib/reportSync.js";
+import { getDoctorPatientIds, doctorNamesMatch } from "../lib/doctorMatch.js";
 
 const router = Router();
 router.use(requireAuth);
 
-// List records: patient sees own; admin passes ?patient_id=
+// List records: patient sees own; admin or doctor passes ?patient_id=. A
+// doctor is restricted to their own patients (see lib/doctorMatch.js) --
+// the earlier version of this route only ever branched on role === "admin",
+// so for a doctor patientId silently fell through to req.user.id (the
+// DOCTOR's own account id, not a patient at all), meaning this always
+// queried for records belonging to nobody and came back empty regardless
+// of which patient's profile was actually open.
 router.get("/", (req, res) => {
-  const patientId = req.user.role === "admin" ? Number(req.query.patient_id) : req.user.id;
-  if (req.user.role === "admin" && !patientId) {
-    return res.status(400).json({ error: "patient_id query param required for admin." });
+  const isStaff = req.user.role === "admin" || req.user.role === "doctor";
+  const patientId = isStaff ? Number(req.query.patient_id) : req.user.id;
+  if (isStaff && !patientId) {
+    return res.status(400).json({ error: "patient_id query param required." });
+  }
+  if (req.user.role === "doctor" && !getDoctorPatientIds(db, req.user.name).has(patientId)) {
+    return res.status(403).json({ error: "You can only view records for your own patients." });
   }
   const rows = db
     .prepare(`SELECT * FROM dental_records WHERE patient_id = ? ORDER BY record_date DESC`)
@@ -110,12 +121,17 @@ router.patch("/:id", requireRole("admin"), (req, res) => {
   res.json(row);
 });
 
-// Admin removes a service/procedure record, reversing whatever it had
-// tallied into the Monthly Report.
-router.delete("/:id", requireRole("admin"), (req, res) => {
+// Admin removes any service/procedure record, reversing whatever it had
+// tallied into the Monthly Report. A doctor can only delete a record where
+// they themselves are the "dentist" on it -- never a colleague's record,
+// even though they can see every record on a patient they share.
+router.delete("/:id", requireRole("admin", "doctor"), (req, res) => {
   const id = Number(req.params.id);
   const existing = db.prepare("SELECT * FROM dental_records WHERE id = ?").get(id);
   if (!existing) return res.status(404).json({ error: "Record not found." });
+  if (req.user.role === "doctor" && !doctorNamesMatch(existing.dentist, req.user.name)) {
+    return res.status(403).json({ error: "You can only delete your own service records." });
+  }
   revertServiceRecord(existing);
   db.prepare("DELETE FROM dental_records WHERE id = ?").run(id);
   res.json({ success: true });

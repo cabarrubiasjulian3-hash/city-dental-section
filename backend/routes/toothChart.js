@@ -1,6 +1,7 @@
 import { Router } from "express";
 import db from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
+import { getDoctorPatientIds } from "../lib/doctorMatch.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -15,9 +16,15 @@ export const LOWER_RIGHT = ["41", "42", "43", "44", "45", "46", "47", "48"];
 export const ALL_TEETH = [...UPPER_RIGHT, ...UPPER_LEFT, ...LOWER_RIGHT, ...LOWER_LEFT];
 
 // GET a patient's full 32-tooth chart. Teeth with no row yet default to "sound".
+// Viewable by: admin (any patient), the patient themself, or a doctor
+// viewing one of their own patients (see lib/doctorMatch.js) -- same
+// ownership rule as patients.js's GET /:id.
 router.get("/:patientId/tooth-chart", (req, res) => {
   const patientId = Number(req.params.patientId);
-  if (req.user.role !== "admin" && req.user.id !== patientId) {
+  const isAdmin = req.user.role === "admin";
+  const isOwnAccount = req.user.id === patientId;
+  const isTheirPatient = req.user.role === "doctor" && getDoctorPatientIds(db, req.user.name).has(patientId);
+  if (!isAdmin && !isOwnAccount && !isTheirPatient) {
     return res.status(403).json({ error: "Not authorized." });
   }
 

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../../lib/api";
+import { useAuth } from "../../context/AuthContext";
 import { Card, EmptyState } from "../../components/ui";
 import ToothChart from "../../components/ToothChart";
 import EditableCell, { SEX_OPTIONS } from "../../components/EditableCell";
@@ -166,6 +167,22 @@ const NEW_PATIENT_BASIC_FIELDS = [
 const INITIAL_RECORD_FIELDS = ["initial_record_date", "initial_procedure", "initial_dentist", "initial_notes"];
 
 export default function AdminPatients({ readOnly = false }) {
+  const { user } = useAuth();
+  // A doctor can delete a service record only if they're the "dentist" on
+  // it -- same name-matching rule the backend enforces in dentalRecords.js.
+  // For anyone else (admin) this is just always true.
+  function canDeleteRecord(record) {
+    if (user?.role !== "doctor") return true;
+    return normalizeForMatch(record.dentist) === normalizeForMatch(user.name);
+  }
+  function normalizeForMatch(str) {
+    return String(str || "")
+      .toLowerCase()
+      .replace(/^(dr\.?|doctor)\s+/i, "")
+      .replace(/[.,]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
   const [patients, setPatients] = useState([]);
   const [selected, setSelected] = useState(null);
   const [showDetails, setShowDetails] = useState(true);
@@ -1194,6 +1211,7 @@ export default function AdminPatients({ readOnly = false }) {
                       <th className="py-2 px-2">Brgy.</th>
                       <th className="py-2 px-2">Age/Sex</th>
                       <th className="py-2 px-2 text-center">DMFT</th>
+                      <th className="py-2 px-2">Dentist</th>
                       <th className="py-2 px-2">Status</th>
                       <th className="py-2 px-2 print:hidden"></th>
                     </tr>
@@ -1216,6 +1234,7 @@ export default function AdminPatients({ readOnly = false }) {
                           {p.age ?? "—"}/{p.sex ? p.sex[0] : "—"}
                         </td>
                         <td className="px-2 py-2 text-center text-forest-700">{p.visit_count || 0}</td>
+                        <td className="px-2 py-2 text-forest-700">{p.latest_dentist || "—"}</td>
                         <td className="px-2 py-2">
                           <span
                             className={`inline-block text-xs font-semibold rounded-full px-3 py-1 whitespace-nowrap ${
@@ -1720,9 +1739,15 @@ export default function AdminPatients({ readOnly = false }) {
                           )}
                         </td>
                         <td className="px-2 py-1 text-right">
-                          <button onClick={() => deleteRecord(r)} className="text-xs text-red-600 underline">
-                            Delete
-                          </button>
+                          {canDeleteRecord(r) ? (
+                            <button onClick={() => deleteRecord(r)} className="text-xs text-red-600 underline">
+                              Delete
+                            </button>
+                          ) : (
+                            <span className="text-xs text-forest-400 italic" title="Only the dentist on this record can delete it">
+                              Not deletable
+                            </span>
+                          )}
                         </td>
                       </tr>
                     ))}

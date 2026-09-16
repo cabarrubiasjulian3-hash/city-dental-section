@@ -3,13 +3,16 @@ import db from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 
 const router = Router();
-router.use(requireAuth, requireRole("admin"));
+router.use(requireAuth);
 
-router.get("/", (req, res) => {
+// Viewable by admin and doctor (the "Dentist" dropdown when adding a
+// record, and the Staff Management page, both need this even for a
+// doctor). Adding, editing, and removing staff stays admin-only.
+router.get("/", requireRole("admin", "doctor"), (req, res) => {
   res.json(db.prepare(`SELECT * FROM staff ORDER BY name ASC`).all());
 });
 
-router.post("/", (req, res) => {
+router.post("/", requireRole("admin"), (req, res) => {
   const { name, role, email, phone, schedule } = req.body;
   if (!name || !role) return res.status(400).json({ error: "name and role are required." });
   const info = db
@@ -18,7 +21,7 @@ router.post("/", (req, res) => {
   res.status(201).json(db.prepare("SELECT * FROM staff WHERE id = ?").get(info.lastInsertRowid));
 });
 
-router.patch("/:id", (req, res) => {
+router.patch("/:id", requireRole("admin"), (req, res) => {
   const { name, role, email, phone, schedule } = req.body;
   db.prepare(
     `UPDATE staff SET name=COALESCE(?,name), role=COALESCE(?,role), email=COALESCE(?,email),
@@ -27,7 +30,7 @@ router.patch("/:id", (req, res) => {
   res.json(db.prepare("SELECT * FROM staff WHERE id = ?").get(req.params.id));
 });
 
-router.delete("/:id", (req, res) => {
+router.delete("/:id", requireRole("admin"), (req, res) => {
   db.prepare(`DELETE FROM staff WHERE id = ?`).run(req.params.id);
   res.json({ ok: true });
 });

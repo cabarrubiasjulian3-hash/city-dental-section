@@ -17,6 +17,22 @@ function formatMonthLabel(monthStr) {
   return new Date(y, m - 1, 1).toLocaleString("en-US", { month: "long", year: "numeric" }).toUpperCase();
 }
 
+// Temporary on-screen debug helper: decodes the JWT stored in localStorage
+// WITHOUT verifying it (just reading the payload — the same thing
+// jwt.io does), so you can see exactly what role/name the browser is
+// actually sending with every API request, no DevTools typing required.
+function decodeTokenDebug() {
+  try {
+    const token = localStorage.getItem("cds_token");
+    if (!token) return { error: "No cds_token in localStorage at all — not logged in?" };
+    const payloadPart = token.split(".")[1];
+    const json = atob(payloadPart.replace(/-/g, "+").replace(/_/g, "/"));
+    return JSON.parse(json);
+  } catch (e) {
+    return { error: "Could not decode token: " + e.message };
+  }
+}
+
 export default function AdminDashboard({ readOnly = false }) {
   // Nothing here mutates data (just a month filter), so readOnly is accepted
   // for a consistent prop signature across doctor-mirrored admin pages but
@@ -51,9 +67,16 @@ export default function AdminDashboard({ readOnly = false }) {
   );
 
   if (loadError) {
+    const decoded = decodeTokenDebug();
     return (
-      <div className="bg-red-50 text-red-700 text-sm rounded-lg px-4 py-3">
-        Could not load the dashboard: {loadError}
+      <div className="space-y-3">
+        <div className="bg-red-50 text-red-700 text-sm rounded-lg px-4 py-3">
+          Could not load the dashboard: {loadError}
+        </div>
+        <div className="bg-yellow-50 text-yellow-900 text-xs font-mono rounded-lg px-4 py-3 whitespace-pre-wrap break-all">
+          DEBUG — decoded login token:{"\n"}
+          {JSON.stringify(decoded, null, 2)}
+        </div>
       </div>
     );
   }
