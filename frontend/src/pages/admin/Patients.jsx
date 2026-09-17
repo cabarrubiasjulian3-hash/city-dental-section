@@ -16,6 +16,12 @@ const BARANGAY_OPTIONS = [
   ...TAYABAS_BARANGAYS.map((brgy) => ({ value: brgy, label: `Barangay ${brgy}` })),
 ];
 
+// id of the single shared <datalist> (rendered once, near the top of
+// AdminPatients' JSX) that every barangay text input below points to via
+// its `list` attribute — this is what makes typing filter the barangay
+// list live instead of showing a long scrollable dropdown.
+const BARANGAY_DATALIST_ID = "barangay-datalist-options";
+
 const YES_NO = [
   { value: "false", label: "No" },
   { value: "true", label: "Yes" },
@@ -126,6 +132,57 @@ function composeDisplayAddress(barangay, address) {
   return `${brgyPart}${CITY_PREFIX}${streetPart ? ` at ${streetPart}` : ""}`;
 }
 
+// Click-to-edit barangay field with type-to-filter suggestions (via the
+// shared <datalist> below), used in the Individual Patient Treatment
+// Record's Address box in place of EditableCell's plain <select>-style
+// dropdown — that dropdown made the admin scroll through all ~50
+// barangays; this lets them type a letter and narrow the list instead.
+function BarangayCell({ value, onSave, className }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value || "");
+
+  useEffect(() => {
+    setDraft(value || "");
+  }, [value]);
+
+  function commit() {
+    setEditing(false);
+    const cleaned = draft.replace(/^Barangay\s+/i, "").trim();
+    if (cleaned !== (value || "")) onSave(cleaned);
+  }
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={() => setEditing(true)}
+        className={`text-left hover:underline ${className || ""}`}
+      >
+        {value ? `Barangay ${value}` : <span className="text-forest-400 font-normal">Select barangay</span>}
+      </button>
+    );
+  }
+
+  return (
+    <input
+      autoFocus
+      list={BARANGAY_DATALIST_ID}
+      value={draft ? `Barangay ${draft}` : draft}
+      placeholder="Type to search barangay"
+      onChange={(e) => setDraft(e.target.value.replace(/^Barangay\s+/i, ""))}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+        if (e.key === "Escape") {
+          setDraft(value || "");
+          setEditing(false);
+        }
+      }}
+      className={`rounded-md border border-cream-300 bg-white px-2 py-1 text-sm ${className || ""}`}
+    />
+  );
+}
+
 // surname/first_name/middle_name ARE real columns on the patient record
 // (editable later in the Individual Patient Treatment Record below), so
 // they get sent to the backend as plain string fields — just not as part
@@ -189,12 +246,13 @@ export default function AdminPatients({ readOnly = false }) {
   const [showDetails, setShowDetails] = useState(true);
   // Clicking a patient row opens the Service History popup automatically.
   // Inside that popup, two green buttons ("Individual Patient Treatment
-  // Record" and "Patient Summary") open their OWN separate popup on top —
-  // the History popup stays open underneath, it's a real second popup, not
-  // content swapped into the same box. All three are independent <Modal>
-  // popups (same component the Log in / Sign up popups use); clicking
-  // outside the topmost open popup closes just that one, revealing
-  // whatever was open underneath it.
+  // Record" and "Patient Summary") close it and open their own separate
+  // popup instead — only one popup is ever on screen at a time (opening a
+  // second one while another is open would let the page underneath peek
+  // through at the edges, since each popup has its own semi-transparent
+  // backdrop). All three are independent <Modal> popups (same component
+  // the Log in / Sign up popups use), so clicking outside the open popup
+  // closes it.
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showTreatmentModal, setShowTreatmentModal] = useState(false);
   const [showSummaryModal, setShowSummaryModal] = useState(false);
@@ -627,6 +685,15 @@ export default function AdminPatients({ readOnly = false }) {
 
   return (
     <div className="patient-page space-y-6">
+      {/* Shared typeahead source for every barangay input on this page —
+          browsers filter these options live as the admin types, so this
+          one list backs both the New Patient form's barangay field and
+          the Individual Patient Treatment Record's BarangayCell. */}
+      <datalist id={BARANGAY_DATALIST_ID}>
+        {TAYABAS_BARANGAYS.map((brgy) => (
+          <option key={brgy} value={`Barangay ${brgy}`} />
+        ))}
+      </datalist>
       <style>{`
         @media print {
           body * { visibility: hidden; }
@@ -795,19 +862,16 @@ export default function AdminPatients({ readOnly = false }) {
               <label className="text-xs text-forest-700 sm:col-span-2">
                 Address
                 <div className="mt-1.5 flex gap-2 items-center">
-                  <select
+                  <input
+                    list={BARANGAY_DATALIST_ID}
+                    placeholder="Type to search barangay"
                     className="shrink-0 rounded-[10px] border border-[#ddd8c6] bg-white px-3 py-2.5 text-sm text-forest-950 basis-2/5"
-                    value={newPatientForm.barangay}
-                    onChange={(e) => setNewPatientField("barangay", e.target.value)}
+                    value={newPatientForm.barangay ? `Barangay ${newPatientForm.barangay}` : ""}
+                    onChange={(e) =>
+                      setNewPatientField("barangay", e.target.value.replace(/^Barangay\s+/i, ""))
+                    }
                     onBlur={checkNewPatientDuplicate}
-                  >
-                    <option value="">Select barangay</option>
-                    {TAYABAS_BARANGAYS.map((brgy) => (
-                      <option key={brgy} value={brgy}>
-                        Barangay {brgy}
-                      </option>
-                    ))}
-                  </select>
+                  />
                   <span className="shrink-0 text-sm text-forest-600">Tayabas City,</span>
                   <input
                     className="flex-1 rounded-[10px] border border-[#ddd8c6] bg-white px-3 py-2.5 text-sm"
@@ -1281,11 +1345,11 @@ export default function AdminPatients({ readOnly = false }) {
       {/* ---------- Service History popup ----------
           Opens automatically when a patient row is clicked. Shows a quick
           rundown of their past visits, the Add Records form, and two green
-          buttons at the bottom. Clicking either button closes this popup
-          and opens its own separate popup (Individual Patient Treatment
-          Record, or Patient Summary) — same <Modal> component as Log in /
-          Sign up, so clicking outside any of these popups closes it. ---------- */}
-      <Modal isOpen={showHistoryModal && !!selected} onClose={() => setShowHistoryModal(false)} size="lg">
+          buttons at the bottom. Clicking either button closes THIS popup
+          before opening its own separate popup (Individual Patient
+          Treatment Record, or Patient Summary) — same <Modal> component as
+          Log in / Sign up, so clicking outside the open popup closes it. ---------- */}
+      <Modal isOpen={showHistoryModal && !!selected} onClose={() => setShowHistoryModal(false)} size="xl">
         {selected && (
           <div className="space-y-4">
             <div>
@@ -1296,18 +1360,60 @@ export default function AdminPatients({ readOnly = false }) {
             </div>
 
             {records.length ? (
-              <div className="max-h-[320px] overflow-y-auto space-y-2">
-                {records.map((r) => (
-                  <div key={r.id} className="bg-cream-100 rounded-lg px-4 py-3">
-                    <p className="text-sm font-semibold text-forest-950">
-                      {r.record_date ? new Date(r.record_date).toLocaleDateString() : "—"} · {r.procedure || "—"}
-                    </p>
-                    <p className="text-xs text-forest-700 mt-0.5">
-                      {r.dentist ? `Dr. ${r.dentist}` : "No dentist on file"}
-                      {r.notes ? ` · ${r.notes}` : ""}
-                    </p>
-                  </div>
-                ))}
+              <div className="max-h-[320px] overflow-y-auto overflow-x-auto">
+                <table className="w-full text-sm min-w-[560px]">
+                  <thead>
+                    <tr className="text-left text-forest-700 uppercase text-xs">
+                      <th className="py-2 pr-2">Date</th>
+                      <th className="py-2 pr-2">Procedure</th>
+                      <th className="py-2 pr-2">Status</th>
+                      <th className="py-2 pr-2">Dentist</th>
+                      <th className="py-2 pr-2">Notes</th>
+                      <th className="py-2 pr-2 print:hidden"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {records.map((r) => (
+                      <tr key={r.id} className="border-t border-cream-200 align-top">
+                        <td className="py-2 pr-2 whitespace-nowrap text-forest-950">
+                          {r.record_date ? new Date(r.record_date).toLocaleDateString() : "—"}
+                        </td>
+                        <td className="py-2 pr-2 text-forest-950">{r.procedure || "—"}</td>
+                        <td className="py-2 pr-2">
+                          <span
+                            className={`inline-block text-xs font-semibold rounded-full px-3 py-1 whitespace-nowrap ${
+                              STATUS_STYLES[recordStatuses.get(r.id)] || ""
+                            }`}
+                          >
+                            {recordStatuses.get(r.id) || "—"}
+                          </span>
+                        </td>
+                        <td className="py-2 pr-2 min-w-[140px]">
+                          <EditableCell
+                            type="select"
+                            options={dentistOptions(r.dentist)}
+                            value={r.dentist}
+                            placeholder="Unassigned"
+                            onSave={(v) => saveRecordField(r, "dentist", v)}
+                          />
+                        </td>
+                        <td className="py-2 pr-2 min-w-[160px]">
+                          <EditableCell
+                            value={r.notes}
+                            placeholder="Notes"
+                            onSave={(v) => saveRecordField(r, "notes", v)}
+                            className="italic"
+                          />
+                        </td>
+                        <td className="py-2 pr-2 text-right whitespace-nowrap print:hidden">
+                          <button type="button" onClick={() => deleteRecord(r)} className="text-xs text-red-600 underline">
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             ) : (
               <EmptyState>No service history yet for this patient.</EmptyState>
@@ -1370,14 +1476,20 @@ export default function AdminPatients({ readOnly = false }) {
             <div className="grid grid-cols-2 gap-3 pt-2 border-t border-cream-200">
               <button
                 type="button"
-                onClick={() => setShowTreatmentModal(true)}
+                onClick={() => {
+                  setShowHistoryModal(false);
+                  setShowTreatmentModal(true);
+                }}
                 className="rounded-full bg-forest-900 text-cream-50 text-sm font-semibold px-4 py-3 hover:bg-forest-800"
               >
                 Individual Patient Treatment Record
               </button>
               <button
                 type="button"
-                onClick={() => setShowSummaryModal(true)}
+                onClick={() => {
+                  setShowHistoryModal(false);
+                  setShowSummaryModal(true);
+                }}
                 className="rounded-full bg-forest-900 text-cream-50 text-sm font-semibold px-4 py-3 hover:bg-forest-800"
               >
                 Patient Summary
@@ -1388,7 +1500,14 @@ export default function AdminPatients({ readOnly = false }) {
       </Modal>
 
       {/* ---------- Individual Patient Treatment Record popup ---------- */}
-      <Modal isOpen={showTreatmentModal && !!selected} onClose={() => setShowTreatmentModal(false)} size="xl">
+      <Modal
+        isOpen={showTreatmentModal && !!selected}
+        onClose={() => {
+          setShowTreatmentModal(false);
+          setShowHistoryModal(true);
+        }}
+        size="2xl"
+      >
         {selected && (
           <div className="space-y-4">
             <div>
@@ -1404,9 +1523,16 @@ export default function AdminPatients({ readOnly = false }) {
                   {String(selected.id).padStart(4, "0")})
                 </p>
 
-                {/* Basic demographic fields — editable pill chips */}
-                <div className="grid sm:grid-cols-3 gap-3">
-                  <div className="bg-cream-100 rounded-xl px-3 py-1.5 inline-block w-fit">
+                {/* Basic demographic fields — editable pill chips, arranged
+                    in 3 rows: (1) Surname/First Name/Middle Name/Date of
+                    Birth, (2) Place of Birth/Age-Sex/Cell Phone Number/
+                    Occupation, (3) Address (wider, since it carries the
+                    barangay select + street input + preview line) and
+                    Parent/Guardian. Each pill is w-full so it fills its
+                    grid cell instead of shrinking to its content. */}
+                <div className="grid sm:grid-cols-4 gap-3">
+                  {/* Row 1 */}
+                  <div className="bg-cream-100 rounded-xl px-3 py-1.5 w-full">
                     <p className="text-[10px] uppercase tracking-wide text-forest-700">Surname</p>
                     <EditableCell
                       value={selected.surname}
@@ -1415,7 +1541,7 @@ export default function AdminPatients({ readOnly = false }) {
                       className="font-semibold text-forest-950"
                     />
                   </div>
-                  <div className="bg-cream-100 rounded-xl px-3 py-1.5 inline-block w-fit">
+                  <div className="bg-cream-100 rounded-xl px-3 py-1.5 w-full">
                     <p className="text-[10px] uppercase tracking-wide text-forest-700">First Name</p>
                     <EditableCell
                       value={selected.first_name}
@@ -1424,7 +1550,7 @@ export default function AdminPatients({ readOnly = false }) {
                       className="font-semibold text-forest-950"
                     />
                   </div>
-                  <div className="bg-cream-100 rounded-xl px-3 py-1.5 inline-block w-fit">
+                  <div className="bg-cream-100 rounded-xl px-3 py-1.5 w-full">
                     <p className="text-[10px] uppercase tracking-wide text-forest-700">Middle Name</p>
                     <EditableCell
                       value={selected.middle_name}
@@ -1433,8 +1559,7 @@ export default function AdminPatients({ readOnly = false }) {
                       className="font-semibold text-forest-950"
                     />
                   </div>
-
-                  <div className="bg-cream-100 rounded-xl px-3 py-1.5 inline-block w-fit">
+                  <div className="bg-cream-100 rounded-xl px-3 py-1.5 w-full">
                     <p className="text-[10px] uppercase tracking-wide text-forest-700">Date of Birth</p>
                     <EditableCell
                       value={selected.birthdate}
@@ -1443,7 +1568,9 @@ export default function AdminPatients({ readOnly = false }) {
                       className="font-semibold text-forest-950"
                     />
                   </div>
-                  <div className="bg-cream-100 rounded-xl px-3 py-1.5 inline-block w-fit">
+
+                  {/* Row 2 */}
+                  <div className="bg-cream-100 rounded-xl px-3 py-1.5 w-full">
                     <p className="text-[10px] uppercase tracking-wide text-forest-700">Place of Birth</p>
                     <EditableCell
                       value={selected.place_of_birth}
@@ -1452,7 +1579,7 @@ export default function AdminPatients({ readOnly = false }) {
                       className="font-semibold text-forest-950"
                     />
                   </div>
-                  <div className="bg-cream-100 rounded-xl px-3 py-1.5 inline-block w-fit">
+                  <div className="bg-cream-100 rounded-xl px-3 py-1.5 w-full">
                     <p className="text-[10px] uppercase tracking-wide text-forest-700">Age / Sex</p>
                     <div className="flex items-center gap-1 font-semibold text-forest-950">
                       <span>{selected.age ?? "—"}</span>
@@ -1465,14 +1592,31 @@ export default function AdminPatients({ readOnly = false }) {
                       />
                     </div>
                   </div>
+                  <div className="bg-cream-100 rounded-xl px-3 py-1.5 w-full">
+                    <p className="text-[10px] uppercase tracking-wide text-forest-700">Cell Phone Number</p>
+                    <EditableCell
+                      value={selected.cellphone_no}
+                      placeholder="e.g. 09XX XXX XXXX (optional)"
+                      onSave={(v) => savePatientField(selected, "cellphone_no", v)}
+                      className="font-semibold text-forest-950"
+                    />
+                  </div>
+                  <div className="bg-cream-100 rounded-xl px-3 py-1.5 w-full">
+                    <p className="text-[10px] uppercase tracking-wide text-forest-700">Occupation</p>
+                    <EditableCell
+                      value={selected.occupation}
+                      placeholder="Occupation"
+                      onSave={(v) => savePatientField(selected, "occupation", v)}
+                      className="font-semibold text-forest-950"
+                    />
+                  </div>
 
-                  <div className="bg-cream-100 rounded-xl px-3 py-1.5 inline-block w-fit">
+                  {/* Row 3 */}
+                  <div className="bg-cream-100 rounded-xl px-3 py-1.5 w-full sm:col-span-3 overflow-x-auto">
                     <p className="text-[10px] uppercase tracking-wide text-forest-700">Address</p>
-                    <div className="flex items-center gap-1 font-semibold text-forest-950">
-                      <EditableCell
+                    <div className="flex flex-nowrap items-center gap-x-2 font-semibold text-forest-950 mt-0.5 whitespace-nowrap">
+                      <BarangayCell
                         value={selected.barangay}
-                        type="select"
-                        options={BARANGAY_OPTIONS}
                         onSave={(v) => savePatientField(selected, "barangay", v)}
                       />
                       <span className="font-normal text-xs text-forest-600 shrink-0">Tayabas City,</span>
@@ -1482,34 +1626,16 @@ export default function AdminPatients({ readOnly = false }) {
                         onSave={(v) => savePatientField(selected, "address", withCityPrefix(v))}
                       />
                     </div>
-                    <p className="text-[11px] font-normal text-forest-500 mt-0.5">
+                    <p className="text-[11px] font-normal text-forest-500 mt-1">
                       {composeDisplayAddress(selected.barangay, selected.address)}
                     </p>
                   </div>
-                  <div className="bg-cream-100 rounded-xl px-3 py-1.5 inline-block w-fit">
-                    <p className="text-[10px] uppercase tracking-wide text-forest-700">Occupation</p>
-                    <EditableCell
-                      value={selected.occupation}
-                      placeholder="Occupation"
-                      onSave={(v) => savePatientField(selected, "occupation", v)}
-                      className="font-semibold text-forest-950"
-                    />
-                  </div>
-                  <div className="bg-cream-100 rounded-xl px-3 py-1.5 inline-block w-fit">
+                  <div className="bg-cream-100 rounded-xl px-3 py-1.5 w-full">
                     <p className="text-[10px] uppercase tracking-wide text-forest-700">Parent / Guardian</p>
                     <EditableCell
                       value={selected.parent_guardian}
                       placeholder="Parent or guardian's name (optional)"
                       onSave={(v) => savePatientField(selected, "parent_guardian", v)}
-                      className="font-semibold text-forest-950"
-                    />
-                  </div>
-                  <div className="bg-cream-100 rounded-xl px-3 py-1.5 inline-block w-fit">
-                    <p className="text-[10px] uppercase tracking-wide text-forest-700">Cell Phone Number</p>
-                    <EditableCell
-                      value={selected.cellphone_no}
-                      placeholder="e.g. 09XX XXX XXXX (optional)"
-                      onSave={(v) => savePatientField(selected, "cellphone_no", v)}
                       className="font-semibold text-forest-950"
                     />
                   </div>
@@ -1754,153 +1880,19 @@ export default function AdminPatients({ readOnly = false }) {
                 </button>
               </div>
             )}
-
-            <p className="text-xs text-forest-700">
-              Click any value above to edit it directly. This is the record of what the clinic actually did for this
-              patient — each service row below is also auto-tallied into the Monthly Report, by this patient's
-              barangay and the attending dentist.
-            </p>
-            {dentists.length === 0 && (
-              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                No dentists on file yet — add one under Staff Management (role "Dentist") to populate this dropdown.
-              </p>
-            )}
-            {records.length ? (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left text-forest-700 uppercase text-xs">
-                      <th className="py-2 px-2">Date</th>
-                      <th className="py-2 px-2">Procedure</th>
-                      <th className="py-2 px-2">Status</th>
-                      <th className="py-2 px-2">Dentist</th>
-                      <th className="py-2 px-2">Notes</th>
-                      <th className="py-2 px-2">Counted in Report As</th>
-                      <th className="py-2 px-2"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {records.map((r) => (
-                      <tr key={r.id} className="border-t border-cream-200">
-                        <td className="px-2 py-1">
-                          <EditableCell value={r.record_date} type="date" onSave={(v) => saveRecordField(r, "record_date", v)} />
-                        </td>
-                        <td className="px-2 py-1">
-                          <EditableCell
-                            value={r.procedure}
-                            type="select"
-                            options={SERVICE_OPTIONS}
-                            onSave={(v) => saveRecordField(r, "procedure", v)}
-                          />
-                        </td>
-                        <td className="px-2 py-1">
-                          <span
-                            className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap ${
-                              STATUS_STYLES[recordStatuses.get(r.id)] || STATUS_STYLES["Not Completed"]
-                            }`}
-                          >
-                            {recordStatuses.get(r.id) || "Not Completed"}
-                          </span>
-                        </td>
-                        <td className="px-2 py-1">
-                          <EditableCell
-                            value={r.dentist || ""}
-                            type="select"
-                            options={dentistOptions(r.dentist)}
-                            onSave={(v) => saveRecordField(r, "dentist", v)}
-                          />
-                        </td>
-                        <td className="px-2 py-1">
-                          <EditableCell value={r.notes} placeholder="Notes" onSave={(v) => saveRecordField(r, "notes", v)} />
-                        </td>
-                        <td className="px-2 py-2 text-xs">
-                          {r.report_field ? (
-                            <span className="text-forest-700">
-                              {REPORT_FIELD_LABELS[r.report_field] || r.report_field} · {r.report_month}
-                            </span>
-                          ) : (
-                            <span className="text-forest-400 italic">
-                              Not counted — add birthdate &amp; sex
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-2 py-1 text-right">
-                          {canDeleteRecord(r) ? (
-                            <button onClick={() => deleteRecord(r)} className="text-xs text-red-600 underline">
-                              Delete
-                            </button>
-                          ) : (
-                            <span className="text-xs text-forest-400 italic" title="Only the dentist on this record can delete it">
-                              Not deletable
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <p className="text-sm text-forest-700">No service records yet.</p>
-            )}
-
-            <div className="add-record-section">
-              <h3>Add Records</h3>
-              <p>
-                For a returning patient, simply add a new visit, procedure, notes, and vital signs.
-              </p>
-            </div>
-
-            <form onSubmit={addServiceRecord} className="grid grid-cols-2 gap-2 border-t border-cream-200 pt-4">
-              <input
-                type="date"
-                required
-                value={newRecord.record_date}
-                onChange={(e) => setNewRecord((f) => ({ ...f, record_date: e.target.value }))}
-                className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
-              />
-              <select
-                required
-                value={newRecord.procedure}
-                onChange={(e) => setNewRecord((f) => ({ ...f, procedure: e.target.value }))}
-                className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
-              >
-                {SERVICE_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value} disabled={o.value === ""}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={newRecord.dentist}
-                onChange={(e) => setNewRecord((f) => ({ ...f, dentist: e.target.value }))}
-                className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
-              >
-                {dentistOptions(newRecord.dentist).map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-              <input
-                placeholder="Notes"
-                value={newRecord.notes}
-                onChange={(e) => setNewRecord((f) => ({ ...f, notes: e.target.value }))}
-                className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
-              />
-              <button
-                disabled={addingRecord}
-                className="col-span-2 bg-forest-900 text-cream-50 text-sm font-semibold rounded-full py-2 hover:bg-forest-800 disabled:opacity-60"
-              >
-                {addingRecord ? "Adding…" : "+ Add service record"}
-              </button>
-            </form>
           </div>
         )}
       </Modal>
 
       {/* ---------- Patient Summary popup ---------- */}
-      <Modal isOpen={showSummaryModal && !!selected} onClose={() => setShowSummaryModal(false)} size="lg">
+      <Modal
+        isOpen={showSummaryModal && !!selected}
+        onClose={() => {
+          setShowSummaryModal(false);
+          setShowHistoryModal(true);
+        }}
+        size="xl"
+      >
         {selected && (
           <div className="space-y-5">
             <div>
