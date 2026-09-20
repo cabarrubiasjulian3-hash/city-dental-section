@@ -4,7 +4,10 @@ import { requireAuth, requireRole } from "../middleware/auth.js";
 import { archiveRotation } from "../lib/archive.js";
 
 const router = Router();
-router.use(requireAuth, requireRole("admin"));
+// Admin AND doctor: the Doctor Portal's Barangay Schedule page is not
+// read-only (see App.jsx), so it loads and manages weekly rotation rules
+// the same way the admin's does.
+router.use(requireAuth, requireRole("admin", "doctor"));
 
 // GET /api/recurring-schedule — list all rotation rules (paused ones included)
 router.get("/", (req, res) => {

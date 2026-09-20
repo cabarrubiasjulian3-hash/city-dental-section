@@ -77,24 +77,28 @@ export default function PortalLayout({ title, subtitle, navItems }) {
     localStorage.setItem("cds_dark_mode", darkMode ? "1" : "0");
   }, [darkMode]);
 
-  // Notification bell — combines recent new patients, patient messages, and
-  // new staff/dentists from the backend (see routes/notifications.js).
-  // Admin-only for now, since that's what the feed covers. "Unread" is
-  // tracked client-side: anything newer than the last time the dropdown was
-  // opened counts toward the badge.
+  // Notification bell (see backend routes/notifications.js). What's in it
+  // depends on who's logged in:
+  //  - Admin: new patients and new staff/dentists.
+  //  - Doctor: patient chat messages nobody has answered yet — they disappear
+  //    for every doctor as soon as any doctor replies.
+  // Patients don't get a bell. "Unread" is tracked client-side: anything
+  // newer than the last time the dropdown was opened counts toward the badge.
+  const hasNotifications = user?.role === "admin" || user?.role === "doctor";
   const [notifications, setNotifications] = useState([]);
   const [notifOpen, setNotifOpen] = useState(false);
   const [lastSeenAt, setLastSeenAt] = useState(() => localStorage.getItem("cds_notifications_seen_at") || "");
 
   useEffect(() => {
-    if (user?.role !== "admin") return;
+    if (!hasNotifications) return;
     function load() {
       api.get("/notifications").then(setNotifications).catch(() => {});
     }
     load();
-    const interval = setInterval(load, 30000);
+    // Doctors are answering a live chat, so check more often than admin.
+    const interval = setInterval(load, user?.role === "doctor" ? 10000 : 30000);
     return () => clearInterval(interval);
-  }, [user?.role]);
+  }, [hasNotifications, user?.role]);
 
   const unreadCount = notifications.filter((n) => !lastSeenAt || new Date(n.at) > new Date(lastSeenAt)).length;
 
@@ -192,11 +196,11 @@ export default function PortalLayout({ title, subtitle, navItems }) {
             <h1 className="text-xl font-display font-bold text-[#ebebc2]">{pageTitle}</h1>
           </div>
           <div className="flex items-center gap-4">
-            {/* Notification bell — admin only, since the feed (new patients,
-                messages, staff) is admin-facing. Settings lives in the
-                profile dropdown below, so there's no separate gear icon
-                here anymore. */}
-            {user?.role === "admin" && (
+            {/* Notification bell — admin (new patients / staff) and doctor
+                (unanswered patient messages). Settings lives in the profile
+                dropdown below, so there's no separate gear icon here
+                anymore. */}
+            {hasNotifications && (
               <div className="relative">
                 <button
                   onClick={toggleNotifications}

@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { MessageSquare } from "lucide-react";
 import { AuthProvider } from "./context/AuthContext";
 import ProtectedRoute from "./components/ProtectedRoute";
 import PortalLayout from "./components/PortalLayout";
@@ -21,6 +22,7 @@ import PatientDashboard from "./pages/patient/Dashboard";
 import PatientProfile from "./pages/patient/Profile";
 import PatientBarangaySchedule from "./pages/patient/BarangaySchedule";
 import PatientDentalRecord from "./pages/patient/DentalRecord";
+import PatientMessages from "./pages/patient/Messages";
 import PatientSupport from "./pages/patient/Support";
 
 import AdminDashboard from "./pages/admin/Dashboard";
@@ -37,6 +39,7 @@ const patientNav = [
   { to: "/patient/profile", icon: <IconUsers />, label: "My Profile" },
   { to: "/patient/barangay-appointments", icon: <IconCalendar />, label: "Barangay Appointments" },
   { to: "/patient/dental-record", icon: <IconReport />, label: "Dental Record" },
+  { to: "/patient/messages", icon: <MessageSquare size={18} />, label: "Messages" },
   { to: "/patient/support", icon: <IconChat />, label: "Support" },
 ];
 
@@ -45,6 +48,7 @@ const adminNav = [
   { to: "/admin/patients", icon: <IconUsers />, label: "Patient Management" },
   { to: "/admin/barangay-schedule", icon: <IconCalendar />, label: "Barangay Schedule" },
   { to: "/admin/monthly-report", icon: <IconReport />, label: "Reports" },
+  { to: "/admin/staff", icon: <IconStaff />, label: "Staff Management" },
   { to: "/admin/doctor-access", icon: <IconDoctor />, label: "Doctor Access" },
   { to: "/admin/archive", icon: <IconArchive />, label: "Archive" },
 ];
@@ -59,7 +63,6 @@ const doctorNav = [
   { to: "/doctor/barangay-schedule", icon: <IconCalendar />, label: "Barangay Schedule" },
   { to: "/doctor/monthly-report", icon: <IconReport />, label: "Reports" },
   { to: "/doctor/messages", icon: <IconChat />, label: "Messages" },
-  { to: "/doctor/staff", icon: <IconStaff />, label: "Staff Management" },
 ];
 
 export default function App() {
@@ -88,6 +91,7 @@ export default function App() {
             <Route path="profile" element={<PatientProfile />} />
             <Route path="barangay-appointments" element={<PatientBarangaySchedule />} />
             <Route path="dental-record" element={<PatientDentalRecord />} />
+            <Route path="messages" element={<PatientMessages />} />
             <Route path="support" element={<PatientSupport />} />
           </Route>
 
@@ -103,19 +107,20 @@ export default function App() {
             <Route path="patients" element={<AdminPatients />} />
             <Route path="barangay-schedule" element={<AdminBarangaySchedule />} />
             <Route path="monthly-report" element={<AdminMonthlyReport />} />
+            <Route path="staff" element={<AdminStaff />} />
             <Route path="doctor-access" element={<AdminDoctorAccess />} />
             <Route path="archive" element={<AdminArchive />} />
           </Route>
 
           {/* Doctor Portal — same page components as Admin. Most stay
               preview-only via readOnly (Patients also allows adding a new
-              patient — see its own readOnly handling). Barangay Schedule,
-              Messages and Staff Management are NOT read-only for a doctor:
-              they can log/edit barangay activities, message their own
-              patients (scoped server-side — see routes/messages.js,
-              routes/patients.js and lib/doctorMatch.js), and add/edit staff.
-              Messages and Staff Management exist ONLY here — the Admin
-              Portal no longer has them. */}
+              patient — see its own readOnly handling). Barangay Schedule
+              and Messages are NOT read-only for a doctor: they can
+              log/edit barangay activities and message their own patients
+              (scoped server-side — see routes/messages.js,
+              routes/patients.js and lib/doctorMatch.js). Messages exists
+              ONLY here — the Admin Portal doesn't have it. Staff
+              Management is Admin-only (not in this portal). */}
           <Route
             path="/doctor"
             element={
@@ -129,7 +134,6 @@ export default function App() {
             <Route path="barangay-schedule" element={<AdminBarangaySchedule />} />
             <Route path="monthly-report" element={<AdminMonthlyReport readOnly />} />
             <Route path="messages" element={<AdminMessages />} />
-            <Route path="staff" element={<AdminStaff />} />
           </Route>
         </Routes>
       </AuthProvider>

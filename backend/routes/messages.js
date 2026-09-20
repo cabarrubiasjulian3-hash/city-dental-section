@@ -3,43 +3,71 @@ import db from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { getDoctorPatientIds, getAssignedDoctorLabel } from "../lib/doctorMatch.js";
 
+// Migration: remember WHICH doctor (by name) sent each reply, so the patient
+// and the other doctors can see who last talked to the patient. Runs once at
+// startup and only adds the column if it's missing — existing messages are
+// kept as-is (old replies just have no name).
+const messageColumns = db.prepare("PRAGMA table_info(messages)").all().map((c) => c.name);
+if (!messageColumns.includes("sender_name")) {
+  db.exec("ALTER TABLE messages ADD COLUMN sender_name TEXT");
+}
+
 const router = Router();
 router.use(requireAuth);
 
-// A doctor should only ever be able to see/send messages for their own
-// patients (never someone else's) — this is the one shared gate both the
-// GET / and POST / routes below check before touching a specific patient_id,
-// so a doctor can't read/reply to a conversation just by guessing an id.
-function assertDoctorOwnsPatient(req, res, patientId) {
-  if (req.user.role !== "doctor") return true;
-  const mine = getDoctorPatientIds(db, req.user.name);
-  if (!mine.has(patientId)) {
-    res.status(403).json({ error: "You can only message your own patients." });
-    return false;
-  }
-  return true;
+const MAX_BODY_LENGTH = 2000;
+
+// Which patients may a doctor open / reply to?
+//  1. Their own patients (matched by dentist name on dental records — see
+//     lib/doctorMatch.js), same as before; and
+//  2. Any patient who has written in through the chatbot (has at least one
+//     message of their own). This is the shared chat inbox: every doctor can
+//     see and answer these, so two doctors can take turns replying.
+function doctorCanAccessPatient(doctorName, patientId) {
+  if (getDoctorPatientIds(db, doctorName).has(patientId)) return true;
+  const wroteIn = db
+    .prepare(`SELECT 1 FROM messages WHERE patient_id = ? AND sender = 'patient' LIMIT 1`)
+    .get(patientId);
+  return Boolean(wroteIn);
 }
 
-// List every patient with a conversation (or who could start one): admin
-// sees everyone; a doctor sees only their own patients (see
-// lib/doctorMatch.js). Each row also carries which doctor (by name) is
-// assigned to that patient, so admin's message list can show it.
+// The one shared gate the GET / and POST / routes below check before touching
+// a specific patient_id, so a doctor can't read/reply to an unrelated
+// patient's conversation just by guessing an id.
+function assertDoctorCanAccessPatient(req, res, patientId) {
+  if (req.user.role !== "doctor") return true;
+  if (doctorCanAccessPatient(req.user.name, patientId)) return true;
+  res.status(403).json({ error: "You can only message your own patients or patients who wrote in through the chat." });
+  return false;
+}
+
+// List every patient with a conversation (or who could start one).
+//  - Admin sees everyone.
+//  - A doctor sees their own patients PLUS everyone who has messaged in
+//    through the chatbot.
+// Each row also says who sent the last message (last_sender), and which
+// doctor replied last (last_reply_by / last_reply_role) so the doctors can tell
+// at a glance who spoke to the patient last and who still needs an answer.
 router.get("/threads", (req, res) => {
   if (!["admin", "doctor"].includes(req.user.role)) return res.status(403).json({ error: "Admin or doctor only." });
 
   const rows = db
     .prepare(
       `SELECT u.id AS patient_id, u.name,
-              (SELECT body FROM messages m WHERE m.patient_id = u.id ORDER BY m.sent_at DESC LIMIT 1) AS last_message,
-              (SELECT sent_at FROM messages m WHERE m.patient_id = u.id ORDER BY m.sent_at DESC LIMIT 1) AS last_sent_at
-       FROM users u WHERE u.role = 'patient' ORDER BY last_sent_at DESC`
+              (SELECT body FROM messages m WHERE m.patient_id = u.id ORDER BY m.sent_at DESC, m.id DESC LIMIT 1) AS last_message,
+              (SELECT sent_at FROM messages m WHERE m.patient_id = u.id ORDER BY m.sent_at DESC, m.id DESC LIMIT 1) AS last_sent_at,
+              (SELECT sender FROM messages m WHERE m.patient_id = u.id ORDER BY m.sent_at DESC, m.id DESC LIMIT 1) AS last_sender,
+              (SELECT sender_name FROM messages m WHERE m.patient_id = u.id AND m.sender IN ('admin','doctor') ORDER BY m.sent_at DESC, m.id DESC LIMIT 1) AS last_reply_by,
+              (SELECT sender FROM messages m WHERE m.patient_id = u.id AND m.sender IN ('admin','doctor') ORDER BY m.sent_at DESC, m.id DESC LIMIT 1) AS last_reply_role,
+              (SELECT COUNT(*) FROM messages m WHERE m.patient_id = u.id AND m.sender = 'patient') AS patient_message_count
+       FROM users u WHERE u.role = 'patient' ORDER BY last_sent_at DESC, u.name ASC`
     )
     .all();
 
   let result = rows;
   if (req.user.role === "doctor") {
     const myPatientIds = getDoctorPatientIds(db, req.user.name);
-    result = result.filter((r) => myPatientIds.has(r.patient_id));
+    result = result.filter((r) => myPatientIds.has(r.patient_id) || r.patient_message_count > 0);
   } else {
     // Admin view: label each thread with whichever doctor is on file for
     // that patient's most recent visit, so it's clear at a glance who's
@@ -54,34 +82,44 @@ router.get("/threads", (req, res) => {
 });
 
 // Get conversation: patient sees own; admin/doctor pass ?patient_id=
+// Each row has sender ('patient' | 'doctor' | 'admin') and, for staff
+// replies, sender_name (the name of the account that sent it).
 router.get("/", (req, res) => {
   const isStaff = req.user.role === "admin" || req.user.role === "doctor";
   const patientId = isStaff ? Number(req.query.patient_id) : req.user.id;
   if (isStaff && !patientId) {
     return res.status(400).json({ error: "patient_id query param required." });
   }
-  if (!assertDoctorOwnsPatient(req, res, patientId)) return;
+  if (!assertDoctorCanAccessPatient(req, res, patientId)) return;
 
-  const rows = db.prepare(`SELECT * FROM messages WHERE patient_id = ? ORDER BY sent_at ASC`).all(patientId);
+  const rows = db.prepare(`SELECT * FROM messages WHERE patient_id = ? ORDER BY sent_at ASC, id ASC`).all(patientId);
   res.json(rows);
 });
 
-// Send a message
+// Send a message. A patient's message goes into their own thread (where every
+// doctor can see it); a doctor/admin reply is stamped with their own name.
 router.post("/", (req, res) => {
-  const { body, patient_id } = req.body;
+  const body = String(req.body?.body ?? "").trim();
   if (!body) return res.status(400).json({ error: "body is required." });
+  if (body.length > MAX_BODY_LENGTH) {
+    return res.status(400).json({ error: `Message is too long (max ${MAX_BODY_LENGTH} characters).` });
+  }
 
   const isStaff = req.user.role === "admin" || req.user.role === "doctor";
-  const targetPatientId = isStaff ? patient_id : req.user.id;
+  const targetPatientId = isStaff ? Number(req.body?.patient_id) : req.user.id;
   if (isStaff && !targetPatientId) {
     return res.status(400).json({ error: "patient_id is required." });
   }
-  if (!assertDoctorOwnsPatient(req, res, targetPatientId)) return;
+  if (isStaff && !db.prepare(`SELECT id FROM users WHERE id = ? AND role = 'patient'`).get(targetPatientId)) {
+    return res.status(404).json({ error: "Patient not found." });
+  }
+  if (!assertDoctorCanAccessPatient(req, res, targetPatientId)) return;
 
   const sender = isStaff ? req.user.role : "patient";
+  const senderName = isStaff ? req.user.name : null;
   const info = db
-    .prepare(`INSERT INTO messages (patient_id, sender, body) VALUES (?, ?, ?)`)
-    .run(targetPatientId, sender, body);
+    .prepare(`INSERT INTO messages (patient_id, sender, sender_name, body) VALUES (?, ?, ?, ?)`)
+    .run(targetPatientId, sender, senderName, body);
   const row = db.prepare("SELECT * FROM messages WHERE id = ?").get(info.lastInsertRowid);
   res.status(201).json(row);
 });

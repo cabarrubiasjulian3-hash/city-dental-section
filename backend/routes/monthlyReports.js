@@ -4,7 +4,11 @@ import { requireAuth, requireRole } from "../middleware/auth.js";
 import { TAYABAS_BARANGAYS } from "../lib/barangays.js";
 
 const router = Router();
-router.use(requireAuth, requireRole("admin"));
+// Admin AND doctor can read the reports — the Doctor Portal shows the same
+// Reports and Barangay Schedule pages (see App.jsx), and both pages load
+// these endpoints. Editing (PATCH below) stays admin-only, since the Doctor
+// Portal's Reports page is read-only.
+router.use(requireAuth, requireRole("admin", "doctor"));
 
 // The category count columns, in the same left-to-right order as the paper
 // e-FHSIS form. "pregnant_f" has no "_m" counterpart because the paper form
@@ -171,7 +175,8 @@ router.get("/trend", (req, res) => {
 
 // PATCH /api/monthly-reports/:id — update one or more category counts (or
 // projected_population for a barangay row) on a single row.
-router.patch("/:id", (req, res) => {
+// Admin only: doctors can view the reports but not change the numbers.
+router.patch("/:id", requireRole("admin"), (req, res) => {
   const id = Number(req.params.id);
   const existing = db.prepare(`SELECT * FROM monthly_report_rows WHERE id = ?`).get(id);
   if (!existing) return res.status(404).json({ error: "Report row not found." });

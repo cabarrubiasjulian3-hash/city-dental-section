@@ -1,110 +1,353 @@
-import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "../../context/AuthContext";
 import { api } from "../../lib/api";
+import { getBotReply, QUICK_REPLIES, WELCOME_MESSAGE } from "../../lib/chatbot";
 
-export default function AdminMessages() {
-  const [threads, setThreads] = useState([]);
-  const [selected, setSelected] = useState(null);
-  const [messages, setMessages] = useState([]);
-  const [text, setText] = useState("");
-  const bottomRef = useRef(null);
-  // Coming from a "New message from ..." notification lands here as
-  // /admin/messages?patient_id=5 — once threads load, auto-open that one so
-  // clicking the notification actually shows the conversation.
-  const [searchParams] = useSearchParams();
-  // Guards against re-opening the notification's thread every time `threads`
-  // refreshes (e.g. after sending a reply) — only auto-select it once, the
-  // first time it becomes available.
-  const autoOpenedRef = useRef(false);
+// Patient Portal → Messages.
+//
+// Every message the patient sends is saved on the server (POST /messages), so
+// ALL doctors can read it in their Messages page and either one can reply.
+// Doctor replies show up here on their own (the page checks the server every
+// few seconds), each labelled with the doctor's name so the patient knows who
+// they're talking to.
+//
+// The automated bot answers instantly on top of that. Its replies live in
+// lib/chatbot.js and are kept in this browser only (localStorage, per
+// logged-in user); each one is pinned right under the patient message that
+// triggered it (afterId = that message's id on the server).
 
-  function loadThreads() {
-    api.get("/messages/threads").then(setThreads).catch(() => {});
-  }
-  useEffect(loadThreads, []);
+const REPLY_DELAY_MS = 700; // how long the "typing…" dots show before the bot replies
+const POLL_MS = 5000; // how often to check for new doctor replies
 
-  useEffect(() => {
-    if (autoOpenedRef.current) return;
-    const targetId = searchParams.get("patient_id");
-    if (!targetId || threads.length === 0) return;
-    const match = threads.find((t) => String(t.patient_id) === targetId);
-    if (match) {
-      autoOpenedRef.current = true;
-      openThread(match);
+// SQLite's datetime('now') is UTC, written "YYYY-MM-DD HH:MM:SS" with no zone.
+function parseServerTime(value) {
+  const d = new Date(`${String(value).replace(" ", "T")}Z`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function formatTime(date) {
+  return date ? date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+}
+
+// "Doctor Ana Lopez" / "Dr. Ana Lopez" / "Ana Lopez"  →  "Dr. Ana Lopez"
+function staffLabel(m) {
+  const name = (m.sender_name || "").trim();
+  if (m.sender === "doctor") return name ? `Dr. ${name.replace(/^(dr\.?|doctor)\s+/i, "")}` : "Doctor";
+  return name || "Staff";
+}
+
+// Keep everything we already have and add whatever the server sent, so a
+// poll that finishes a moment before a just-sent message can't erase it.
+function mergeById(prev, incoming) {
+  const map = new Map(prev.map((m) => [m.id, m]));
+  for (const m of incoming) map.set(m.id, m);
+  return [...map.values()].sort((a, b) => a.id - b.id);
+}
+
+export default function PatientMessages() {
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  const botKey = `cds_chat_bot_${user?.id ?? "guest"}`;
+
+  const [serverMsgs, setServerMsgs] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [botMsgs, setBotMsgs] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(botKey) || "[]");
+      return Array.isArray(saved) ? saved : [];
+    } catch {
+      return [];
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threads, searchParams]);
+  });
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const [typing, setTyping] = useState(false);
+  const [error, setError] = useState("");
+  const scrollRef = useRef(null);
+  const inputRef = useRef(null);
+  const timerRef = useRef(null);
 
-  async function openThread(t) {
-    setSelected(t);
-    const msgs = await api.get(`/messages?patient_id=${t.patient_id}`);
-    setMessages(msgs);
+  // Remember the bot's replies (last 100) across refreshes.
+  useEffect(() => {
+    try {
+      localStorage.setItem(botKey, JSON.stringify(botMsgs.slice(-100)));
+    } catch {
+      /* storage full / blocked — chat still works */
+    }
+  }, [botMsgs, botKey]);
+
+  // Load the conversation, then keep checking for new doctor replies.
+  useEffect(() => {
+    let cancelled = false;
+    function load() {
+      api
+        .get("/messages")
+        .then((rows) => {
+          if (cancelled) return;
+          setServerMsgs((prev) => mergeById(prev, rows));
+          setLoadError(false);
+          setLoaded(true);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setLoadError(true);
+          setLoaded(true);
+        });
+    }
+    load();
+    const id = setInterval(() => {
+      if (!document.hidden) load();
+    }, POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  // Don't fire a pending bot reply after leaving the page.
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  // Patient messages + doctor replies (from the server) in order, with each
+  // bot reply placed right under the message that triggered it.
+  const timeline = useMemo(() => {
+    const botsByAnchor = new Map();
+    for (const b of botMsgs) {
+      const list = botsByAnchor.get(b.afterId) || [];
+      list.push(b);
+      botsByAnchor.set(b.afterId, list);
+    }
+    const items = [];
+    for (const m of serverMsgs) {
+      items.push({ key: `s-${m.id}`, kind: m.sender === "patient" ? "me" : "staff", m });
+      for (const b of botsByAnchor.get(m.id) || []) items.push({ key: b.id, kind: "bot", b });
+    }
+    return items;
+  }, [serverMsgs, botMsgs]);
+
+  // Jump to the newest message — but only when something was actually added,
+  // so the background check doesn't yank the view while someone is reading.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [timeline.length, typing]);
+
+  // Let the message box grow with what's typed (the form is several lines).
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [text]);
+
+  const busy = sending || typing;
+
+  async function send(raw) {
+    const body = raw.trim();
+    if (!body || busy) return;
+
+    setError("");
+    setSending(true);
+    let saved;
+    try {
+      saved = await api.post("/messages", { body });
+    } catch (err) {
+      setError(err.message || "Hindi naipadala ang mensahe. Subukan po ulit.");
+      setSending(false);
+      return;
+    }
+    setServerMsgs((prev) => mergeById(prev, [saved]));
+    setText("");
+    setSending(false);
+    setTyping(true);
+
+    timerRef.current = setTimeout(() => {
+      const reply = getBotReply(body);
+      setBotMsgs((prev) => [
+        ...prev.slice(-99),
+        {
+          id: `b-${saved.id}`,
+          afterId: saved.id,
+          text: reply.text,
+          link: reply.link,
+          prefill: reply.prefill,
+          at: new Date().toISOString(),
+        },
+      ]);
+      setTyping(false);
+    }, REPLY_DELAY_MS);
   }
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  async function send(e) {
+  function handleSubmit(e) {
     e.preventDefault();
-    if (!text.trim() || !selected) return;
-    await api.post("/messages", { body: text, patient_id: selected.patient_id });
-    setText("");
-    const msgs = await api.get(`/messages?patient_id=${selected.patient_id}`);
-    setMessages(msgs);
-    loadThreads();
+    send(text);
+  }
+
+  // Enter sends; Shift+Enter makes a new line.
+  function handleKeyDown(e) {
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      send(text);
+    }
+  }
+
+  function usePrefill(prefill) {
+    setText(prefill);
+    inputRef.current?.focus();
   }
 
   return (
     <div className="space-y-6">
       <h2 className="font-display text-2xl font-bold text-forest-950">Messages</h2>
-   <div className="border border-cream-200 rounded-2xl flex h-[560px] overflow-hidden shadow-[0_2px_12px_rgba(37,53,34,0.12)]">
-        <div className="w-64 border-r border-cream-200 overflow-y-auto bg-cream-100">
-          {threads.map((t) => (
-            <button
-              key={t.patient_id}
-              onClick={() => openThread(t)}
-              className={`w-full text-left px-4 py-3 border-b border-cream-200 hover:bg-cream-100 ${
-                selected?.patient_id === t.patient_id ? "bg-cream-200" : ""
-              }`}
-            >
-              <p className="font-medium text-sm text-forest-950">{t.name}</p>
-              <p className="text-xs text-forest-700 truncate">{t.last_message || "No messages yet"}</p>
-            </button>
-          ))}
-          {threads.length === 0 && <p className="text-sm text-forest-700 p-4">No patients yet.</p>}
+
+      <div className="border border-cream-200 rounded-2xl flex flex-col h-[620px] overflow-hidden bg-cream-50 shadow-[0_2px_12px_rgba(37,53,34,0.12)]">
+        {/* Header */}
+        <div className="flex items-center gap-3 px-5 py-3 border-b border-cream-200 bg-cream-100">
+          <div className="w-10 h-10 rounded-full bg-brand-900 overflow-hidden shrink-0">
+            <img src="/logo.png" alt="" className="w-full h-full object-cover" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-sm text-forest-950 leading-tight">City Dental Section</p>
+            <p className="text-xs text-forest-600">Automated assistant · Doctors reply here</p>
+          </div>
         </div>
 
-        <div className="flex-1 flex flex-col bg-cream-50">
-          {selected ? (
-            <>
-              <div className="flex-1 overflow-y-auto p-5 space-y-3">
-                {messages.map((m) => (
-                  <div key={m.id} className={`flex ${m.sender === "admin" ? "justify-end" : "justify-start"}`}>
-                    <div
-                      className={`max-w-md px-4 py-2 rounded-2xl text-sm ${
-                        m.sender === "admin" ? "bg-brand-900 text-brand-50" : "bg-cream-200 text-forest-950"
-                      }`}
-                    >
-                      {m.body}
-                    </div>
-                  </div>
+        {/* Conversation */}
+        <div ref={scrollRef} aria-live="polite" className="flex-1 overflow-y-auto p-5 space-y-3">
+          <Bubble variant="bot" text={WELCOME_MESSAGE} label="Automated assistant" />
+
+          {!loaded && <p className="text-center text-xs text-forest-500">Loading messages…</p>}
+          {loadError && (
+            <p className="text-center text-xs text-red-600">
+              Hindi makakonekta sa server ngayon. Subukan po ulit mamaya.
+            </p>
+          )}
+
+          {timeline.map((item) =>
+            item.kind === "me" ? (
+              <Bubble key={item.key} variant="me" text={item.m.body} time={formatTime(parseServerTime(item.m.sent_at))} />
+            ) : item.kind === "staff" ? (
+              <Bubble
+                key={item.key}
+                variant="staff"
+                label={staffLabel(item.m)}
+                text={item.m.body}
+                time={formatTime(parseServerTime(item.m.sent_at))}
+              />
+            ) : (
+              <Bubble
+                key={item.key}
+                variant="bot"
+                label="Automated reply"
+                text={item.b.text}
+                time={formatTime(new Date(item.b.at))}
+                link={item.b.link}
+                onLink={(to) => navigate(to)}
+                prefill={item.b.prefill}
+                onPrefill={usePrefill}
+              />
+            )
+          )}
+
+          {typing && (
+            <div className="flex justify-start">
+              <div className="bg-cream-200 rounded-2xl px-4 py-3 flex items-center gap-1" aria-label="Nagta-type…">
+                {[0, 150, 300].map((delay) => (
+                  <span
+                    key={delay}
+                    className="w-1.5 h-1.5 rounded-full bg-forest-600 animate-bounce"
+                    style={{ animationDelay: `${delay}ms` }}
+                  />
                 ))}
-                <div ref={bottomRef} />
               </div>
-              <form onSubmit={send} className="flex items-center gap-3 border-t border-cream-200 p-4">
-                <input
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                  placeholder={`Message ${selected.name}…`}
-                  className="flex-1 rounded-full border border-cream-200 bg-cream-100 px-4 py-2 text-sm outline-none focus:border-forest-700"
-                />
-                <button className="w-10 h-10 rounded-full bg-brand-900 text-brand-50 flex items-center justify-center">➤</button>
-              </form>
-            </>
-          ) : (
-            <p className="m-auto text-sm text-forest-700">Select a conversation to view messages.</p>
+            </div>
           )}
         </div>
+
+        {/* Quick replies + input */}
+        <div className="border-t border-cream-200 bg-cream-50">
+          <div className="px-4 pt-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-forest-500 text-center mb-2">
+              Tap to send
+            </p>
+            <div className="flex flex-wrap justify-center gap-2">
+              {QUICK_REPLIES.map((q) => (
+                <button
+                  key={q}
+                  onClick={() => send(q)}
+                  disabled={busy}
+                  className="rounded-full border border-cream-200 bg-cream-100 px-3.5 py-1.5 text-xs font-semibold text-forest-900 hover:bg-cream-200 transition-colors disabled:opacity-50"
+                >
+                  {q}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {error && <p className="px-5 pt-2 text-xs text-red-600">{error}</p>}
+
+          <form onSubmit={handleSubmit} className="flex items-end gap-3 p-4">
+            <textarea
+              ref={inputRef}
+              rows={1}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Mag-type ng mensahe…"
+              className="flex-1 resize-none rounded-2xl border border-cream-200 bg-cream-100 px-4 py-2 text-sm outline-none focus:border-forest-700"
+            />
+            <button
+              type="submit"
+              disabled={!text.trim() || busy}
+              className="w-10 h-10 shrink-0 rounded-full bg-brand-900 text-brand-50 flex items-center justify-center disabled:opacity-50"
+              title="Send"
+            >
+              ➤
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// variant: "me" (the patient) · "bot" (automated reply) · "staff" (a doctor)
+function Bubble({ variant, label, text, time, link, onLink, prefill, onPrefill }) {
+  const mine = variant === "me";
+  const styles = {
+    me: "bg-brand-900 text-brand-50",
+    bot: "bg-cream-200 text-forest-950",
+    staff: "bg-cream-50 border-2 border-leaf-300 text-forest-950",
+  };
+  return (
+    <div className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+      <div className={`max-w-[85%] sm:max-w-md flex flex-col ${mine ? "items-end" : "items-start"}`}>
+        {label && (
+          <span className={`text-[11px] font-semibold mb-1 px-1 ${variant === "staff" ? "text-forest-800" : "text-forest-500"}`}>
+            {label}
+          </span>
+        )}
+        <div className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-line break-words ${styles[variant]}`}>
+          {text}
+        </div>
+        {prefill && (
+          <button
+            onClick={() => onPrefill(prefill)}
+            className="mt-2 rounded-full bg-brand-900 text-brand-50 text-xs font-semibold px-3.5 py-1.5 hover:opacity-90 transition-opacity"
+          >
+            I-fill up ang form dito ↓
+          </button>
+        )}
+        {link && (
+          <button
+            onClick={() => onLink(link.to)}
+            className="mt-2 rounded-full bg-brand-900 text-brand-50 text-xs font-semibold px-3.5 py-1.5 hover:opacity-90 transition-opacity"
+          >
+            {link.label} →
+          </button>
+        )}
+        {time && <span className="text-[10px] text-forest-500 mt-1 px-1">{time}</span>}
       </div>
     </div>
   );
