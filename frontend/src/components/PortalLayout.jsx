@@ -13,6 +13,7 @@ import {
   Users,
   MessageSquare,
   UserPlus,
+  ClipboardEdit,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../lib/api";
@@ -23,6 +24,7 @@ const NOTIFICATION_ICONS = {
   patient: Users,
   message: MessageSquare,
   staff: UserPlus,
+  record_change: ClipboardEdit, // a doctor changed a patient record (admin only)
 };
 
 export default function PortalLayout({ title, subtitle, navItems }) {

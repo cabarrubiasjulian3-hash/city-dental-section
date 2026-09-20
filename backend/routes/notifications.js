@@ -1,6 +1,10 @@
 import { Router } from "express";
 import db from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
+import { ensureActivityLogTable } from "../middleware/auditLog.js";
+
+// The admin feed reads what doctors changed (see middleware/auditLog.js).
+ensureActivityLogTable();
 
 const router = Router();
 router.use(requireAuth);
@@ -25,8 +29,48 @@ function toIso(sqliteTimestamp) {
 //    every doctor shares the chat inbox. As soon as ANY doctor replies to that
 //    patient, the item disappears for everyone, so two doctors don't answer
 //    the same message. Links into /doctor/messages.
-//  - ADMIN: new patients and new staff only. Messages aren't an admin thing
-//    anymore (the Messages page lives in the Doctor Portal).
+//  - ADMIN: new patients, new staff, and what DOCTORS changed on patient
+//    records ("Dr. Ana Lopez updated a patient record"). Messages aren't an
+//    admin thing anymore (the Messages page lives in the Doctor Portal).
+// What a doctor's logged action reads like in the bell.
+const DOCTOR_ACTION_TEXT = {
+  created_patient: "added a new patient record",
+  updated_patient: "updated a patient record",
+  archived_patient: "archived a patient record",
+  added_service_record: "added a service record",
+  updated_service_record: "updated a service record",
+  archived_service_record: "archived a service record",
+  logged_vitals: "logged vital signs",
+  updated_oral_chart: "updated an oral health chart",
+  imported_patients: "imported patient records",
+};
+
+function doctorLabel(name) {
+  const clean = String(name || "").trim().replace(/^(dr\.?|doctor)\s+/i, "");
+  return clean ? `Dr. ${clean}` : "A doctor";
+}
+
+// A doctor editing one record field-by-field logs many rows. Fold rows for the
+// same doctor + patient + kind of change made within 30 minutes of each other
+// into ONE bell item ("… — 5 changes"). Rows arrive newest first.
+function groupDoctorActivity(rows) {
+  const WINDOW_MS = 30 * 60 * 1000;
+  const groups = [];
+  for (const r of rows) {
+    const t = new Date(toIso(r.created_at)).getTime();
+    const g = groups.find(
+      (x) => x.actor_id === r.actor_id && x.patient_id === r.patient_id && x.action === r.action && x.oldest - t <= WINDOW_MS
+    );
+    if (g) {
+      g.count += 1;
+      g.oldest = t;
+    } else {
+      groups.push({ ...r, count: 1, oldest: t });
+    }
+  }
+  return groups;
+}
+
 router.get("/", (req, res) => {
   if (!["admin", "doctor"].includes(req.user.role)) return res.status(403).json({ error: "Admin or doctor only." });
 
@@ -86,7 +130,22 @@ router.get("/", (req, res) => {
       link: `/admin/staff`,
     }));
 
-  const combined = [...patients, ...staff]
+  const doctorChanges = groupDoctorActivity(
+    db.prepare(`SELECT * FROM activity_log WHERE actor_role = 'doctor' ORDER BY created_at DESC, id DESC LIMIT 200`).all()
+  )
+    .slice(0, 15)
+    .map((g) => ({
+      id: `activity-${g.id}`,
+      type: "record_change",
+      title: `${doctorLabel(g.actor_name)} ${DOCTOR_ACTION_TEXT[g.action] || "changed a record"}`,
+      detail:
+        (g.patient_name || "a patient") +
+        (g.count > 1 ? ` — ${g.count} changes` : g.detail ? ` — ${g.detail}` : ""),
+      at: toIso(g.created_at),
+      link: g.patient_name ? `/admin/patients?search=${encodeURIComponent(g.patient_name)}` : `/admin/patients`,
+    }));
+
+  const combined = [...patients, ...staff, ...doctorChanges]
     .filter((n) => n.at)
     .sort((a, b) => new Date(b.at) - new Date(a.at))
     .slice(0, 30);

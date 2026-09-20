@@ -12,18 +12,38 @@ const CONDITIONS = [
   { value: "missing", label: "Missing", dot: "bg-cream-200 border border-forest-300", tooth: "bg-transparent border-dashed border-forest-300" },
 ];
 
+// Conditions that count toward the DMFT number shown in "draft" mode below
+// (a preview only — once the patient is saved, the server's number is used).
+const DMFT_CONDITIONS = ["decayed", "missing", "filled", "for_extraction"];
+
 function conditionInfo(value) {
   return CONDITIONS.find((c) => c.value === value) || CONDITIONS[0];
 }
 
-export default function ToothChart({ patientId, isAdmin }) {
+// The Oral Health Chart. Three ways to use it:
+//
+//   <ToothChart patientId={id} isAdmin />
+//       Editable, and every click is saved to that patient straight away.
+//       (Used inside "Add Service Record".)
+//
+//   <ToothChart patientId={id} isAdmin={false} />
+//       View only — hover a tooth to see its condition. (Used in the Patient
+//       Summary; the patient portal uses it the same way.)
+//
+//   <ToothChart isAdmin draft={map} onDraftChange={setMap} />
+//       For a patient that doesn't exist yet (New Patient Record): nothing is
+//       sent to the server; the chart lives in `map` ({ "16": "decayed", … })
+//       and the parent saves it once the patient has been created.
+export default function ToothChart({ patientId, isAdmin, draft, onDraftChange }) {
+  const draftMode = draft !== undefined;
   const [chart, setChart] = useState([]);
   const [dmft, setDmft] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!draftMode);
   const [editingTooth, setEditingTooth] = useState(null);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!patientId) return;
+    if (draftMode || !patientId) return;
     setLoading(true);
     api
       .get(`/patients/${patientId}/tooth-chart`)
@@ -33,19 +53,31 @@ export default function ToothChart({ patientId, isAdmin }) {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [patientId]);
+  }, [patientId, draftMode]);
 
   function toothData(toothNumber) {
+    if (draftMode) return { condition: draft[toothNumber] || "sound", treatment_note: "" };
     return chart.find((t) => t.tooth_number === toothNumber) || { condition: "sound", treatment_note: "" };
   }
 
   async function setCondition(toothNumber, condition) {
-    const updated = await api.patch(`/patients/${patientId}/tooth-chart/${toothNumber}`, { condition });
-    setChart((list) => {
-      const withoutThis = list.filter((t) => t.tooth_number !== toothNumber);
-      return [...withoutThis, { tooth_number: toothNumber, ...updated }];
-    });
-    setEditingTooth(null);
+    setError("");
+    if (draftMode) {
+      onDraftChange?.({ ...draft, [toothNumber]: condition });
+      setEditingTooth(null);
+      return;
+    }
+    try {
+      await api.patch(`/patients/${patientId}/tooth-chart/${toothNumber}`, { condition });
+      // Reload so the chart and the DMFT number always match what the server
+      // actually saved (the server decides what counts toward DMFT).
+      const fresh = await api.get(`/patients/${patientId}/tooth-chart`);
+      setChart(fresh.chart);
+      setDmft(fresh.dmft);
+      setEditingTooth(null);
+    } catch (err) {
+      setError(err.message || "Could not save that change.");
+    }
   }
 
   function Tooth({ number }) {
@@ -57,6 +89,7 @@ export default function ToothChart({ patientId, isAdmin }) {
           type="button"
           onClick={() => isAdmin && setEditingTooth(editingTooth === number ? null : number)}
           title={`Tooth ${number}: ${info.label}${data.treatment_note ? ` — ${data.treatment_note}` : ""}`}
+          aria-label={`Tooth ${number}: ${info.label}`}
           className={`w-6 h-6 rounded-full border-2 ${info.tooth} ${isAdmin ? "cursor-pointer hover:ring-2 hover:ring-forest-400" : "cursor-default"}`}
         />
         <span className="text-[10px] text-forest-700 mt-0.5">{number}</span>
@@ -82,12 +115,14 @@ export default function ToothChart({ patientId, isAdmin }) {
 
   if (loading) return <p className="text-sm text-forest-700">Loading tooth chart…</p>;
 
+  const dmftShown = draftMode ? Object.values(draft).filter((c) => DMFT_CONDITIONS.includes(c)).length : dmft;
+
   return (
     <div className="bg-cream-50 border border-cream-200 rounded-2xl p-5">
       <div className="flex items-center justify-between mb-4">
         <p className="text-xs font-semibold uppercase tracking-wide text-forest-700">Oral Health Chart</p>
         <p className="text-xs text-forest-700">
-          DMFT: <span className="font-bold text-forest-950">{dmft}</span>
+          DMFT: <span className="font-bold text-forest-950">{dmftShown}</span>
         </p>
       </div>
 
@@ -104,8 +139,9 @@ export default function ToothChart({ patientId, isAdmin }) {
       </div>
 
       <p className="text-xs text-forest-700 text-center mt-4">
-        {isAdmin ? "Click a tooth to set its condition." : "Hover a tooth to see its condition."}
+        {isAdmin ? "Click a tooth to set its condition." : "View only — hover a tooth to see its condition."}
       </p>
+      {error && <p className="text-xs text-red-600 text-center mt-1">{error}</p>}
       <div className="flex flex-wrap justify-center gap-4 mt-3">
         {CONDITIONS.map((c) => (
           <span key={c.value} className="flex items-center gap-1.5 text-xs text-forest-700">

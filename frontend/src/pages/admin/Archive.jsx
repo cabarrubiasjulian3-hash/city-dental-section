@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../../lib/api";
 import { Card, EmptyState } from "../../components/ui";
+import ConfirmDialog from "../../components/ConfirmDialog";
 
 // Everything that gets "deleted" or "removed" anywhere in the portals lands
 // here instead of being destroyed. Admin can look through it and restore
@@ -39,6 +40,8 @@ export default function AdminArchive() {
   const [tab, setTab] = useState("all");
   const [search, setSearch] = useState("");
   const [restoringId, setRestoringId] = useState(null);
+  // The item the admin is being asked to confirm restoring (or null).
+  const [confirmItem, setConfirmItem] = useState(null);
   const [message, setMessage] = useState(null); // { type: "success" | "error", text }
 
   useEffect(() => {
@@ -157,7 +160,7 @@ export default function AdminArchive() {
                     <td className="py-3 pr-3 text-forest-700 whitespace-nowrap">{formatWhen(item.archived_at)}</td>
                     <td className="py-3 text-right whitespace-nowrap">
                       <button
-                        onClick={() => restore(item)}
+                        onClick={() => setConfirmItem(item)}
                         disabled={restoringId === item.id}
                         className="bg-brand-900 text-brand-50 text-xs font-semibold rounded-full px-4 py-1.5 hover:bg-brand-800 disabled:opacity-60"
                       >
@@ -175,6 +178,24 @@ export default function AdminArchive() {
           </EmptyState>
         )}
       </Card>
+
+      {/* "Are you sure?" pop-up before anything is restored. */}
+      <ConfirmDialog
+        isOpen={!!confirmItem}
+        title="Restore this item?"
+        message={
+          confirmItem &&
+          `"${confirmItem.label}" (${TYPE_LABEL[confirmItem.entity_type] || confirmItem.entity_type}) will be put back exactly where it was.`
+        }
+        confirmLabel="Restore"
+        busy={restoringId !== null}
+        onConfirm={async () => {
+          const item = confirmItem;
+          await restore(item);
+          setConfirmItem(null);
+        }}
+        onCancel={() => restoringId === null && setConfirmItem(null)}
+      />
     </div>
   );
 }

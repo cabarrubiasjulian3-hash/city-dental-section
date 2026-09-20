@@ -127,6 +127,17 @@ function TotalsRow({ label, totals }) {
   );
 }
 
+// Which part of the on-screen summary to show — the page got long with all
+// three parts + the trend chart on top of each other, so they can be viewed
+// one at a time.
+const PART_FILTERS = [
+  { key: "all", label: "All parts" },
+  { key: "I", label: "Part I" },
+  { key: "II", label: "Part II" },
+  { key: "III", label: "Part III" },
+  { key: "trend", label: "Trend" },
+];
+
 export default function AdminMonthlyReport({ readOnly = false }) {
   const [tab, setTab] = useState("dentist");
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
@@ -136,6 +147,10 @@ export default function AdminMonthlyReport({ readOnly = false }) {
   const [trend, setTrend] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  // Summary filters: which part(s) to show, and (for Part III) which dentist.
+  const [part, setPart] = useState("all");
+  const [dentistFilter, setDentistFilter] = useState("");
+  const show = (key) => part === "all" || part === key;
 
   function load() {
     setLoading(true);
@@ -170,6 +185,10 @@ export default function AdminMonthlyReport({ readOnly = false }) {
     () => dentistGroups.map(([name, rows]) => ({ name, totals: sumRows(rows) })),
     [dentistGroups]
   );
+  const visibleDentistTotals = useMemo(
+    () => (dentistFilter ? dentistPerDentistTotals.filter((d) => d.name === dentistFilter) : dentistPerDentistTotals),
+    [dentistPerDentistTotals, dentistFilter]
+  );
   const consolidatedByActivity = useMemo(() => {
     const byActivity = new Map();
     for (const r of dentistRows) {
@@ -194,7 +213,6 @@ export default function AdminMonthlyReport({ readOnly = false }) {
   }
 
   return (
-    <fieldset disabled={readOnly} style={{ display: "contents" }}>
     <div className="space-y-6">
       {readOnly && (
         <div className="bg-clay-500/10 border border-clay-500 text-forest-900 text-sm rounded-lg px-3 py-2 print:hidden">
@@ -212,11 +230,66 @@ export default function AdminMonthlyReport({ readOnly = false }) {
         </div>
       </div>
 
+      {/* Filters for the on-screen summary below (Parts I–III + Trend). */}
+      <Card className="print:hidden">
+        <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
+          <label className="text-xs text-forest-700">
+            Month
+            <input
+              type="month"
+              value={month}
+              onChange={(e) => setMonth(e.target.value)}
+              className="mt-1 block rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm text-forest-950"
+            />
+          </label>
+
+          <div>
+            <p className="text-xs text-forest-700 mb-1">Show</p>
+            <div className="flex flex-wrap gap-2">
+              {PART_FILTERS.map((f) => (
+                <button
+                  key={f.key}
+                  type="button"
+                  onClick={() => setPart(f.key)}
+                  aria-pressed={part === f.key}
+                  className={`text-xs font-semibold rounded-full px-3.5 py-2 transition-colors ${
+                    part === f.key
+                      ? "bg-brand-900 text-brand-50"
+                      : "bg-cream-100 border border-cream-200 text-forest-900 hover:bg-cream-200"
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {show("III") && dentistPerDentistTotals.length > 0 && (
+            <label className="text-xs text-forest-700">
+              Dentist (Part III)
+              <select
+                value={dentistFilter}
+                onChange={(e) => setDentistFilter(e.target.value)}
+                className="mt-1 block rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm text-forest-950"
+              >
+                <option value="">All dentists</option>
+                {dentistPerDentistTotals.map((d) => (
+                  <option key={d.name} value={d.name}>
+                    Dr. {d.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
+      </Card>
+
       {/* Printable summary — Parts I–III + Trend, matching the paper e-FHSIS
           layout. This is for on-screen viewing only; Print / Export prints
           the By Dentist / By Barangay tab instead (see below), so it's
           hidden from the print output here. */}
-      <div className="grid lg:grid-cols-2 gap-5 print:hidden">
+      <div className={`${part === "all" ? "grid lg:grid-cols-2 gap-5" : "space-y-5"} print:hidden`}>
+        {show("I") && (
         <Card title="Part I — Recipients of Basic Oral Health Care (BOHC)" subtitle="Tally per age group, by sex">
           <table className="w-full text-sm">
             <thead>
@@ -253,8 +326,11 @@ export default function AdminMonthlyReport({ readOnly = false }) {
             </tbody>
           </table>
         </Card>
+        )}
 
+        {(show("II") || show("III")) && (
         <div className="space-y-5">
+          {show("II") && (
           <Card title="Part II — Services Rendered" subtitle={`${servicesRendered.reduce((s, r) => s + r.value, 0).toLocaleString()} total procedures`}>
             {servicesRendered.length ? (
               <div className="space-y-3">
@@ -276,9 +352,11 @@ export default function AdminMonthlyReport({ readOnly = false }) {
               <EmptyState>No service records logged this month yet.</EmptyState>
             )}
           </Card>
+          )}
 
+          {show("III") && (
           <Card title="Part III — Per-Dentist Output" subtitle="Consolidated monthly report">
-            {dentistPerDentistTotals.length ? (
+            {visibleDentistTotals.length ? (
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-forest-500 uppercase text-xs tracking-wide">
@@ -289,7 +367,7 @@ export default function AdminMonthlyReport({ readOnly = false }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {dentistPerDentistTotals.map(({ name, totals }) => (
+                  {visibleDentistTotals.map(({ name, totals }) => (
                     <tr key={name} className="border-t border-cream-200">
                       <td className="py-2 font-medium text-forest-950">Dr. {name}</td>
                       <td className="py-2 text-right text-forest-700">
@@ -307,9 +385,12 @@ export default function AdminMonthlyReport({ readOnly = false }) {
               <EmptyState>No dentists on Staff Management yet.</EmptyState>
             )}
           </Card>
+          )}
         </div>
+        )}
       </div>
 
+      {show("trend") && (
       <Card title="Trend" subtitle="Total clients served, last 6 months" className="print:hidden">
         {trend.some((m) => m.value > 0) ? (
           <LineChart data={trend} />
@@ -317,18 +398,13 @@ export default function AdminMonthlyReport({ readOnly = false }) {
           <EmptyState>Not enough data yet for a trend.</EmptyState>
         )}
       </Card>
+      )}
 
       <div className="flex items-center justify-between flex-wrap gap-3 print:hidden">
         <p className="text-sm text-forest-700 max-w-2xl">
           Digitized version of the City Dental Office's monthly report — enter counts cell-by-cell like the paper
           form, per dentist or per barangay. Subtotals and the overall total are calculated for you.
         </p>
-        <input
-          type="month"
-          value={month}
-          onChange={(e) => setMonth(e.target.value)}
-          className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
-        />
       </div>
 
       <div className="flex items-center justify-between flex-wrap gap-3 print:hidden">
@@ -374,6 +450,9 @@ export default function AdminMonthlyReport({ readOnly = false }) {
           just this block — same mechanism the Patients page print uses.
           Only one of the two tabs below is ever mounted at a time, so
           whichever one is on screen is what prints. */}
+      {/* Only the editable tables are locked for doctors — the filters, tabs
+          and Print stay usable. */}
+      <fieldset disabled={readOnly} style={{ display: "contents" }}>
       <div id="printable-monthly-report">
       {!loading && tab === "dentist" && (
         <div className="space-y-6">
@@ -516,7 +595,7 @@ export default function AdminMonthlyReport({ readOnly = false }) {
         </Card>
       )}
       </div>
+      </fieldset>
     </div>
-    </fieldset>
   );
 }

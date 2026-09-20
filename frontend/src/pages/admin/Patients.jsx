@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { Pencil, Archive as ArchiveIcon } from "lucide-react";
 import { api } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
 import { Card, EmptyState } from "../../components/ui";
 import Modal from "../../components/Modal";
+import ConfirmDialog from "../../components/ConfirmDialog";
 import ToothChart from "../../components/ToothChart";
 import EditableCell, { SEX_OPTIONS } from "../../components/EditableCell";
 import { SERVICE_OPTIONS, visitsRequiredFor, computeRecordStatuses } from "../../lib/services";
@@ -301,6 +303,31 @@ export default function AdminPatients({ readOnly = false }) {
   // new duplicate through.
   const [confirmedDuplicate, setConfirmedDuplicate] = useState(false);
 
+  // "Are you sure?" pop-up shown before a patient or a service record is
+  // archived: { title, message, confirmLabel, onConfirm } or null.
+  const [confirmDialog, setConfirmDialog] = useState(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+
+  // Pop-up shown when a NEW patient record is about to be made for someone
+  // who already has an account or record: an array of the matching patients,
+  // or null. dismissedDupKey remembers which name+barangay the admin already
+  // answered for, so the pop-up doesn't keep coming back for the same person.
+  const [duplicatePopup, setDuplicatePopup] = useState(null);
+  const [duplicateFromSubmit, setDuplicateFromSubmit] = useState(false);
+  const [dismissedDupKey, setDismissedDupKey] = useState("");
+
+  // "Add Service Record" is its own pop-up now (like the Treatment Record and
+  // the Patient Summary), no longer a form squeezed into Service History.
+  const [showAddRecordModal, setShowAddRecordModal] = useState(false);
+  const [addRecordError, setAddRecordError] = useState("");
+
+  // Oral Health Chart for the New Patient form: { "16": "decayed", … }. The
+  // patient doesn't exist yet, so it is only saved after they're created.
+  // chartConfirmed = the admin has filled it in (marking any tooth ticks it
+  // automatically; the checkbox covers "all teeth are sound").
+  const [newPatientChart, setNewPatientChart] = useState({});
+  const [chartConfirmed, setChartConfirmed] = useState(false);
+
   function loadPatients() {
     api.get("/patients").then(setPatients).catch(() => {});
   }
@@ -370,6 +397,7 @@ export default function AdminPatients({ readOnly = false }) {
     setShowHistoryModal(true);
     setShowTreatmentModal(false);
     setShowSummaryModal(false);
+    setShowAddRecordModal(false);
     try {
       const full = await api.get(`/patients/${p.id}`);
       setSelected(full);
@@ -392,6 +420,10 @@ export default function AdminPatients({ readOnly = false }) {
     setNewPatientForm(EMPTY_NEW_PATIENT_FORM);
     setNewPatientMatches([]);
     setConfirmedDuplicate(false);
+    setDuplicatePopup(null);
+    setDismissedDupKey("");
+    setNewPatientChart({});
+    setChartConfirmed(false);
     setShowNewPatientForm(true);
     setRowError("");
   }
@@ -414,12 +446,59 @@ export default function AdminPatients({ readOnly = false }) {
         )}&age=`
       );
 
-      setNewPatientMatches(response.matches || []);
+      const matches = response.matches || [];
+      setNewPatientMatches(matches);
+
+      // Pop up (once per name + barangay) as soon as both the surname and
+      // first name are in and someone with that name already exists.
+      const key = `${fullName}|${newPatientForm.barangay || ""}`;
+      if (
+        matches.length > 0 &&
+        newPatientForm.surname.trim() &&
+        newPatientForm.first_name.trim() &&
+        !confirmedDuplicate &&
+        !duplicatePopup &&
+        key !== dismissedDupKey
+      ) {
+        setDuplicateFromSubmit(false);
+        setDuplicatePopup(matches);
+      }
     } catch (error) {
       setRowError(error.message);
     } finally {
       setCheckingNewPatient(false);
     }
+  }
+
+  // The name + barangay the duplicate pop-up is currently about.
+  function currentDuplicateKey() {
+    return `${composeFullName(newPatientForm)}|${newPatientForm.barangay || ""}`;
+  }
+
+  // Pop-up choice 1: open the person's existing record instead of making a
+  // second one.
+  function openExistingFromPopup(match) {
+    setDuplicatePopup(null);
+    setShowNewPatientForm(false);
+    openPatient(match);
+  }
+
+  // Pop-up choice 2: the admin says it's really a different person — carry on
+  // with the new record. If the pop-up came from pressing "Create patient
+  // record", finish creating it right away.
+  function continueNewRecordAnyway() {
+    const fromSubmit = duplicateFromSubmit;
+    setConfirmedDuplicate(true);
+    setDismissedDupKey(currentDuplicateKey());
+    setDuplicatePopup(null);
+    setRowError("");
+    if (fromSubmit) createNewPatient(undefined, { skipDuplicateCheck: true });
+  }
+
+  // Pop-up choice 3: go back to the form without deciding yet.
+  function dismissDuplicatePopup() {
+    setDismissedDupKey(currentDuplicateKey());
+    setDuplicatePopup(null);
   }
 
   // Submits the New Patient Record modal. Creates the patient with the
@@ -429,14 +508,20 @@ export default function AdminPatients({ readOnly = false }) {
   // history, hospitalization, dietary/social, conforme) so the whole intake
   // form is saved in one submit. Finally opens the newly created patient's
   // details.
-  async function createNewPatient(event) {
-    event.preventDefault();
+  async function createNewPatient(event, { skipDuplicateCheck = false } = {}) {
+    event?.preventDefault?.();
 
     // Hard stop even if the button's disabled state was somehow bypassed
     // (e.g. pressing Enter in a field) — Add Records (date + service) is
     // required before a patient record can be created.
     if (!newPatientForm.initial_record_date || !newPatientForm.initial_procedure) {
       setRowError("Please fill in the date and select a service in \"Add Records\" before creating the patient record.");
+      return;
+    }
+
+    // The Oral Health Chart is required too.
+    if (!chartConfirmed) {
+      setRowError("Please complete the Oral Health Chart before creating the patient record.");
       return;
     }
 
@@ -450,7 +535,7 @@ export default function AdminPatients({ readOnly = false }) {
     // explicitly clicked "Continue new record" for the name currently on
     // screen (confirmedDuplicate — reset on every subsequent name/barangay
     // edit, see setNewPatientField).
-    if (!confirmedDuplicate) {
+    if (!confirmedDuplicate && !skipDuplicateCheck) {
       const fullName = composeFullName(newPatientForm);
       setCheckingNewPatient(true);
       try {
@@ -462,9 +547,10 @@ export default function AdminPatients({ readOnly = false }) {
         const matches = response.matches || [];
         setNewPatientMatches(matches);
         if (matches.length > 0) {
-          setRowError(
-            "May existing record na ang pasyenteng ito — buksan yun sa halip, o pindutin ang \"Continue new record\" sa babala sa itaas kung sigurado kang ibang tao talaga sila."
-          );
+          // Ask what to do in a pop-up: open their existing record, or
+          // continue making a new one.
+          setDuplicateFromSubmit(true);
+          setDuplicatePopup(matches);
           return;
         }
       } catch (error) {
@@ -512,6 +598,23 @@ export default function AdminPatients({ readOnly = false }) {
         dentist: newPatientForm.initial_dentist,
         notes: newPatientForm.initial_notes,
       });
+
+      // Save the Oral Health Chart the admin filled in (teeth left alone are
+      // "sound" by default, so only the marked ones need saving).
+      const markedTeeth = Object.entries(newPatientChart).filter(([, condition]) => condition && condition !== "sound");
+      if (markedTeeth.length) {
+        try {
+          await Promise.all(
+            markedTeeth.map(([tooth, condition]) =>
+              api.patch(`/patients/${created.id}/tooth-chart/${tooth}`, { condition })
+            )
+          );
+        } catch (chartError) {
+          setRowError(
+            `The patient was created, but part of the Oral Health Chart could not be saved (${chartError.message}). Open "Add Service Record" to update it.`
+          );
+        }
+      }
 
       setPatients((currentPatients) => [
         { ...updated, visit_count: 1, latest_procedure: newPatientForm.initial_procedure, latest_procedure_visits: 1 },
@@ -562,13 +665,16 @@ export default function AdminPatients({ readOnly = false }) {
   // "Delete" doesn't destroy anything — the patient (with their service
   // records) is moved to the Archive, and an admin can restore them from the
   // Archive page.
-  async function deleteRow(patient) {
-    if (
-      !window.confirm(
-        `Move ${patient.name} to the Archive?\n\nTheir service records go with them. You can restore them anytime from the Archive page.`
-      )
-    )
-      return;
+  function deleteRow(patient) {
+    setConfirmDialog({
+      title: "Archive this patient record?",
+      message: `${patient.name} will be moved to the Archive, together with their service records.\n\nYou can restore them anytime from the Archive page.`,
+      confirmLabel: "Archive",
+      onConfirm: () => archivePatient(patient),
+    });
+  }
+
+  async function archivePatient(patient) {
     setRowError("");
     try {
       await api.del(`/patients/${patient.id}`);
@@ -592,6 +698,7 @@ export default function AdminPatients({ readOnly = false }) {
     e.preventDefault();
     if (!newRecord.record_date || !newRecord.procedure) return;
     setAddingRecord(true);
+    setAddRecordError("");
     try {
       const row = await api.post("/dental-records", { ...newRecord, patient_id: selected.id });
       setRecords((list) => [row, ...list]);
@@ -608,6 +715,11 @@ export default function AdminPatients({ readOnly = false }) {
             : p
         )
       );
+      // Back to Service History, where the new visit is now listed.
+      setShowAddRecordModal(false);
+      setShowHistoryModal(true);
+    } catch (err) {
+      setAddRecordError(err.message || "Could not add the service record.");
     } finally {
       setAddingRecord(false);
     }
@@ -619,8 +731,18 @@ export default function AdminPatients({ readOnly = false }) {
   }
 
   // Moves one service record to the Archive (restorable from the Archive page).
-  async function deleteRecord(record) {
-    if (!window.confirm("Move this service record to the Archive?\n\nYou can restore it from the Archive page.")) return;
+  function deleteRecord(record) {
+    setConfirmDialog({
+      title: "Archive this service record?",
+      message: `${record.procedure || "This service record"}${
+        record.record_date ? ` (${new Date(record.record_date).toLocaleDateString()})` : ""
+      } will be moved to the Archive.\n\nYou can restore it from the Archive page.`,
+      confirmLabel: "Archive",
+      onConfirm: () => archiveRecord(record),
+    });
+  }
+
+  async function archiveRecord(record) {
     try {
       await api.del(`/dental-records/${record.id}`);
       setRecords((list) => list.filter((r) => r.id !== record.id));
@@ -636,6 +758,18 @@ export default function AdminPatients({ readOnly = false }) {
   // box in the Individual Patient Treatment Record). Uses the existing
   // POST /patients/:id/vitals endpoint — each save is a new history row,
   // and the form below always shows the most recent one.
+  // Runs whatever the open "Are you sure?" pop-up is asking about.
+  async function runConfirmDialog() {
+    if (!confirmDialog) return;
+    setConfirmBusy(true);
+    try {
+      await confirmDialog.onConfirm();
+    } finally {
+      setConfirmBusy(false);
+      setConfirmDialog(null);
+    }
+  }
+
   async function saveVitals(e) {
     e.preventDefault();
     if (!selected) return;
@@ -1168,6 +1302,39 @@ export default function AdminPatients({ readOnly = false }) {
               </div>
             </div>
 
+            {/* Oral Health Chart — required. Nothing is sent until the patient
+                is created; the marked teeth are saved right after. */}
+            <div className="border-t border-cream-200 pt-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-forest-700 mb-2">
+                Oral Health Chart <span className="text-red-600">*</span>
+              </p>
+              <p className="text-xs text-forest-700 mb-2">
+                Required. Click a tooth to set its condition — teeth you leave alone count as sound.
+              </p>
+              <ToothChart
+                isAdmin
+                draft={newPatientChart}
+                onDraftChange={(next) => {
+                  setNewPatientChart(next);
+                  setChartConfirmed(true);
+                }}
+              />
+              <label className="mt-2 flex items-center gap-2 text-xs text-forest-800">
+                <input
+                  type="checkbox"
+                  checked={chartConfirmed}
+                  onChange={(e) => setChartConfirmed(e.target.checked)}
+                />
+                I've completed the Oral Health Chart
+              </label>
+              {!chartConfirmed && (
+                <p className="mt-1 text-xs font-medium text-red-600">
+                  ⚠ Complete the Oral Health Chart (mark the teeth, or tick the box if all teeth are sound) before
+                  creating the patient record.
+                </p>
+              )}
+            </div>
+
             {/* Initial visit / service — required. A patient can't be created
                 without this: it's what gets posted to /dental-records right
                 after creation, so the row never starts at 0 visits. */}
@@ -1247,12 +1414,18 @@ export default function AdminPatients({ readOnly = false }) {
               </button>
               <button
                 disabled={
-                  addingRow || checkingNewPatient || !newPatientForm.initial_record_date || !newPatientForm.initial_procedure
+                  addingRow ||
+                  checkingNewPatient ||
+                  !newPatientForm.initial_record_date ||
+                  !newPatientForm.initial_procedure ||
+                  !chartConfirmed
                 }
                 className="rounded-full bg-forest-900 px-4 py-2 text-sm font-semibold text-cream-50 disabled:opacity-60"
                 title={
                   !newPatientForm.initial_record_date || !newPatientForm.initial_procedure
                     ? "Fill in the date and service in 'Add Records' before creating the record."
+                    : !chartConfirmed
+                    ? "Complete the Oral Health Chart before creating the record."
                     : undefined
                 }
               >
@@ -1307,7 +1480,8 @@ export default function AdminPatients({ readOnly = false }) {
                   <tr className="text-left text-forest-700 uppercase text-xs">
                     <th className="py-2 px-2">Patient</th>
                     <th className="py-2 px-2">Brgy.</th>
-                    <th className="py-2 px-2">Age/Sex</th>
+                    <th className="py-2 px-2">Age</th>
+                    <th className="py-2 px-2">Sex</th>
                     <th className="py-2 px-2 text-center">DMFT</th>
                     <th className="py-2 px-2">Dentist</th>
                     <th className="py-2 px-2">Status</th>
@@ -1328,9 +1502,8 @@ export default function AdminPatients({ readOnly = false }) {
                         <p className="text-xs text-forest-500">TC-{String(p.id).padStart(4, "0")}</p>
                       </td>
                       <td className="px-2 py-2 text-forest-700">{p.barangay || "—"}</td>
-                      <td className="px-2 py-2 text-forest-700">
-                        {p.age ?? "—"}/{p.sex ? p.sex[0] : "—"}
-                      </td>
+                      <td className="px-2 py-2 text-forest-700">{p.age ?? "—"}</td>
+                      <td className="px-2 py-2 text-forest-700">{p.sex || "—"}</td>
                       <td className="px-2 py-2 text-center text-forest-700">{p.visit_count || 0}</td>
                       <td className="px-2 py-2 text-forest-700">{p.latest_dentist || "—"}</td>
                       <td className="px-2 py-2">
@@ -1344,26 +1517,32 @@ export default function AdminPatients({ readOnly = false }) {
                       </td>
                       <td className="px-2 py-2 text-right whitespace-nowrap print:hidden">
                         {!readOnly && (
-                          <>
+                          <div className="inline-flex items-center gap-1">
                             <button
+                              type="button"
+                              title="Edit patient record"
+                              aria-label={`Edit ${p.name}`}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 editPatient(p);
                               }}
-                              className="text-xs text-forest-800 underline mr-3"
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-forest-800 hover:bg-cream-200"
                             >
-                              Edit
+                              <Pencil size={16} />
                             </button>
                             <button
+                              type="button"
+                              title="Archive patient record"
+                              aria-label={`Archive ${p.name}`}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 deleteRow(p);
                               }}
-                              className="text-xs text-red-600 underline"
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-red-700 hover:bg-red-50"
                             >
-                              Delete
+                              <ArchiveIcon size={16} />
                             </button>
-                          </>
+                          </div>
                         )}
                       </td>
                     </tr>
@@ -1442,8 +1621,14 @@ export default function AdminPatients({ readOnly = false }) {
                         </td>
                         <td className="py-2 pr-2 text-right whitespace-nowrap print:hidden">
                           {canDeleteRecord(r) && (
-                            <button type="button" onClick={() => deleteRecord(r)} className="text-xs text-red-600 underline">
-                              Delete
+                            <button
+                              type="button"
+                              title="Archive service record"
+                              aria-label="Archive service record"
+                              onClick={() => deleteRecord(r)}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-red-700 hover:bg-red-50"
+                            >
+                              <ArchiveIcon size={16} />
                             </button>
                           )}
                         </td>
@@ -1456,14 +1641,75 @@ export default function AdminPatients({ readOnly = false }) {
               <EmptyState>No service history yet for this patient.</EmptyState>
             )}
 
-            {/* Add Records — same form/handler as inside the Treatment
-                Record popup, so a new visit logged here shows up there too. */}
-            <div className="add-record-section border-t border-cream-200 pt-3">
-              <h3 className="text-sm font-semibold text-forest-950">Add Records</h3>
-              <p className="text-xs text-forest-700 mt-0.5">
-                For a returning patient, simply add a new visit, procedure, notes, and vital signs.
+            <div className="grid gap-3 pt-2 border-t border-cream-200 sm:grid-cols-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setAddRecordError("");
+                  setShowHistoryModal(false);
+                  setShowAddRecordModal(true);
+                }}
+                className="rounded-full bg-forest-900 text-cream-50 text-sm font-semibold px-4 py-3 hover:bg-forest-800"
+              >
+                Add Service Record
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowHistoryModal(false);
+                  setShowTreatmentModal(true);
+                }}
+                className="rounded-full bg-forest-900 text-cream-50 text-sm font-semibold px-4 py-3 hover:bg-forest-800"
+              >
+                Individual Patient Treatment Record
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowHistoryModal(false);
+                  setShowSummaryModal(true);
+                }}
+                className="rounded-full bg-forest-900 text-cream-50 text-sm font-semibold px-4 py-3 hover:bg-forest-800"
+              >
+                Patient Summary
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* ---------- Add Service Record popup ----------
+          Its own popup (like the Treatment Record and Patient Summary):
+          opened from the green "Add Service Record" button in Service
+          History, and closing it (or saving) goes back there. It also holds
+          the patient's Oral Health Chart, so what was found at this visit
+          can be marked right away — every click is saved to the patient. ---------- */}
+      <Modal
+        isOpen={showAddRecordModal && !!selected}
+        onClose={() => {
+          setShowAddRecordModal(false);
+          setShowHistoryModal(true);
+        }}
+        size="xl"
+      >
+        {selected && (
+          <div className="space-y-4">
+            <div>
+              <h3 className="font-display text-lg font-bold text-forest-950">Add Service Record</h3>
+              <p className="text-sm text-forest-500 mt-0.5">
+                {selected.name} · TC-{String(selected.id).padStart(4, "0")}
+              </p>
+              <p className="text-xs text-forest-700 mt-1">
+                For a returning patient, add the new visit and procedure, and update the Oral Health Chart if anything
+                changed.
               </p>
             </div>
+
+            {addRecordError && (
+              <p className="text-sm font-medium text-red-600 bg-red-50 border border-red-300 rounded-lg px-3 py-2">
+                ⚠ {addRecordError}
+              </p>
+            )}
 
             <form onSubmit={addServiceRecord} className="grid grid-cols-2 gap-2">
               <input
@@ -1502,36 +1748,30 @@ export default function AdminPatients({ readOnly = false }) {
                 onChange={(e) => setNewRecord((f) => ({ ...f, notes: e.target.value }))}
                 className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
               />
-              <button
-                disabled={addingRecord}
-                className="col-span-2 bg-forest-900 text-cream-50 text-sm font-semibold rounded-full py-2 hover:bg-forest-800 disabled:opacity-60"
-              >
-                {addingRecord ? "Adding…" : "+ Add service record"}
-              </button>
-            </form>
 
-            <div className="grid grid-cols-2 gap-3 pt-2 border-t border-cream-200">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowHistoryModal(false);
-                  setShowTreatmentModal(true);
-                }}
-                className="rounded-full bg-forest-900 text-cream-50 text-sm font-semibold px-4 py-3 hover:bg-forest-800"
-              >
-                Individual Patient Treatment Record
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowHistoryModal(false);
-                  setShowSummaryModal(true);
-                }}
-                className="rounded-full bg-forest-900 text-cream-50 text-sm font-semibold px-4 py-3 hover:bg-forest-800"
-              >
-                Patient Summary
-              </button>
-            </div>
+              <div className="col-span-2 pt-2">
+                <ToothChart patientId={selected.id} isAdmin />
+              </div>
+
+              <div className="col-span-2 flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAddRecordModal(false);
+                    setShowHistoryModal(true);
+                  }}
+                  className="rounded-full border border-forest-900 px-4 py-2 text-sm font-semibold text-forest-900"
+                >
+                  Cancel
+                </button>
+                <button
+                  disabled={addingRecord}
+                  className="rounded-full bg-forest-900 text-cream-50 text-sm font-semibold px-5 py-2 hover:bg-forest-800 disabled:opacity-60"
+                >
+                  {addingRecord ? "Adding…" : "+ Add service record"}
+                </button>
+              </div>
+            </form>
           </div>
         )}
       </Modal>
@@ -1963,10 +2203,71 @@ export default function AdminPatients({ readOnly = false }) {
               </div>
             </div>
 
-            <ToothChart patientId={selected.id} isAdmin />
+            {/* View only — the chart is filled in when the patient is created
+                and updated from "Add Service Record". */}
+            <ToothChart patientId={selected.id} isAdmin={false} />
           </div>
         )}
       </Modal>
+
+      {/* ---------- "Are you sure?" pop-up (archive patient / service record) ---------- */}
+      <ConfirmDialog
+        isOpen={!!confirmDialog}
+        title={confirmDialog?.title}
+        message={confirmDialog?.message}
+        confirmLabel={confirmDialog?.confirmLabel || "Confirm"}
+        tone="danger"
+        busy={confirmBusy}
+        onConfirm={runConfirmDialog}
+        onCancel={() => !confirmBusy && setConfirmDialog(null)}
+      />
+
+      {/* ---------- "This patient already has an account / record" pop-up ---------- */}
+      <ConfirmDialog
+        isOpen={!!duplicatePopup}
+        title="May existing account o record na ang patient na ito"
+        message={
+          duplicatePopup && (
+            <div className="space-y-2">
+              <p>May nakita kaming kapareho ng pangalan:</p>
+              <ul className="space-y-1.5">
+                {duplicatePopup.slice(0, 5).map((m) => (
+                  <li key={m.id} className="rounded-lg bg-cream-100 px-3 py-2 text-forest-950">
+                    <span className="font-semibold">{m.name}</span>
+                    <span className="text-forest-700">
+                      {m.barangay ? ` — Brgy. ${m.barangay}` : ""}
+                      {m.age != null && m.age !== "" ? `, ${m.age} yrs` : ""}
+                      {typeof m.visit_count === "number"
+                        ? m.visit_count > 0
+                          ? ` · ${m.visit_count} visit${m.visit_count === 1 ? "" : "s"}`
+                          : " · may account pero wala pang record"
+                        : ""}
+                    </span>
+                    {duplicatePopup.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => openExistingFromPopup(m)}
+                        className="ml-2 text-xs font-semibold underline"
+                      >
+                        Buksan
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <p>
+                Buksan ang existing record para hindi madoble, o ituloy ang bagong record kung ibang tao talaga ito.
+              </p>
+            </div>
+          )
+        }
+        confirmLabel="Buksan ang existing record"
+        secondaryLabel="Ituloy ang bagong record"
+        cancelLabel="Balik sa form"
+        onConfirm={() => openExistingFromPopup(duplicatePopup[0])}
+        onSecondary={continueNewRecordAnyway}
+        onCancel={dismissDuplicatePopup}
+      />
     </div>
   );
 }

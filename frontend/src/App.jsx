@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import { MessageSquare } from "lucide-react";
+import { MessageSquare, UserCog } from "lucide-react";
 import { AuthProvider } from "./context/AuthContext";
 import ProtectedRoute from "./components/ProtectedRoute";
 import PortalLayout from "./components/PortalLayout";
@@ -31,6 +31,7 @@ import AdminBarangaySchedule from "./pages/admin/BarangaySchedule";
 import AdminMonthlyReport from "./pages/admin/MonthlyReport";
 import AdminMessages from "./pages/admin/Messages";
 import AdminStaff from "./pages/admin/Staff";
+import AdminUserManagement from "./pages/admin/UserManagement";
 import AdminDoctorAccess from "./pages/admin/DoctorAccess";
 import AdminArchive from "./pages/admin/Archive";
 
@@ -49,6 +50,7 @@ const adminNav = [
   { to: "/admin/barangay-schedule", icon: <IconCalendar />, label: "Barangay Schedule" },
   { to: "/admin/monthly-report", icon: <IconReport />, label: "Reports" },
   { to: "/admin/staff", icon: <IconStaff />, label: "Staff Management" },
+  { to: "/admin/users", icon: <UserCog size={18} />, label: "User Management" },
   { to: "/admin/doctor-access", icon: <IconDoctor />, label: "Doctor Access" },
   { to: "/admin/archive", icon: <IconArchive />, label: "Archive" },
 ];
@@ -108,6 +110,7 @@ export default function App() {
             <Route path="barangay-schedule" element={<AdminBarangaySchedule />} />
             <Route path="monthly-report" element={<AdminMonthlyReport />} />
             <Route path="staff" element={<AdminStaff />} />
+            <Route path="users" element={<AdminUserManagement />} />
             <Route path="doctor-access" element={<AdminDoctorAccess />} />
             <Route path="archive" element={<AdminArchive />} />
           </Route>

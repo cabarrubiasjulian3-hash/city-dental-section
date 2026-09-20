@@ -32,6 +32,8 @@ const ACTIVITY_OPTIONS = [
 // dentist holds in a barangay — just the 3 regular clinical services.
 const ROTATION_ACTIVITY_OPTIONS = ["Tooth Extraction", "Tooth Consultation", "E-Consultation / E-Konsulta"];
 
+const EMPTY_FILTERS = { from: "", to: "", barangay: "", activity: "", dentist: "", status: "" };
+
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const DAY_OPTIONS = DAY_NAMES.map((label, value) => ({ value: String(value), label }));
 
@@ -111,6 +113,9 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
   const [showRecurringForm, setShowRecurringForm] = useState(false);
   const [recurringForm, setRecurringForm] = useState(emptyRecurringForm);
   const [recurringError, setRecurringError] = useState("");
+
+  // Filters for the Schedule table (all optional; "" = no filter).
+  const [filters, setFilters] = useState(EMPTY_FILTERS);
 
   function load() {
     api.get("/barangay-schedule").then(setSchedules).catch(() => {});
@@ -273,12 +278,44 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
     return schedules.filter((s) => s.status === "Completed" && s.visit_date?.slice(0, 7) === thisMonth).length;
   }, [schedules]);
 
+  // Dropdown choices for the filters: whatever is actually on the schedule,
+  // plus the standard activities / everyone in Staff Management.
+  const filterOptions = useMemo(() => {
+    const uniq = (list) => [...new Set(list.filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    return {
+      barangays: uniq(schedules.map((s) => s.barangay_name)),
+      activities: uniq([...ACTIVITY_OPTIONS, ...schedules.map((s) => s.services)]),
+      dentists: uniq([...dentists, ...schedules.map((s) => s.dentist)]),
+    };
+  }, [schedules, dentists]);
+
+  const filtersActive = Object.values(filters).some(Boolean);
+
+  const filteredSchedules = useMemo(
+    () =>
+      schedules.filter((s) => {
+        if (filters.from && (s.visit_date || "") < filters.from) return false;
+        if (filters.to && (s.visit_date || "") > filters.to) return false;
+        if (filters.barangay && s.barangay_name !== filters.barangay) return false;
+        if (filters.activity && s.services !== filters.activity) return false;
+        if (filters.dentist && s.dentist !== filters.dentist) return false;
+        if (filters.status && s.status !== filters.status) return false;
+        return true;
+      }),
+    [schedules, filters]
+  );
+
+  function setFilter(field, value) {
+    setFilters((f) => ({ ...f, [field]: value }));
+  }
+
   const notYetVisited = useMemo(() => {
     const scheduled = new Set(schedules.map((s) => s.barangay_name));
     return TAYABAS_BARANGAYS.filter((name) => !scheduled.has(name));
   }, [schedules]);
 
   return (
+    <div className="space-y-6">
     <fieldset disabled={readOnly} style={{ display: "contents" }}>
     <div className="space-y-6">
       {readOnly && (
@@ -364,12 +401,120 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
         </Card>
       )}
 
-      <div className="grid lg:grid-cols-3 gap-6 items-start">
+    </div>
+    </fieldset>
+
+      {/* Filters live OUTSIDE the read-only fieldset on purpose: doctors can't
+          edit the schedule, but they can still filter it. */}
+      <Card>
+        <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+          <div>
+            <h3 className="font-display text-base font-bold text-forest-950">Filter schedule</h3>
+            <p className="text-xs text-forest-600 mt-0.5">
+              Showing {filteredSchedules.length} of {schedules.length} scheduled date{schedules.length === 1 ? "" : "s"}
+            </p>
+          </div>
+          {filtersActive && (
+            <button
+              type="button"
+              onClick={() => setFilters(EMPTY_FILTERS)}
+              className="text-xs font-semibold rounded-full border border-forest-900 px-3.5 py-1.5 text-forest-900 hover:bg-cream-100"
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          <label className="text-xs text-forest-700">
+            From date
+            <input
+              type="date"
+              value={filters.from}
+              max={filters.to || undefined}
+              onChange={(e) => setFilter("from", e.target.value)}
+              className="mt-1 w-full rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm text-forest-950"
+            />
+          </label>
+          <label className="text-xs text-forest-700">
+            To date
+            <input
+              type="date"
+              value={filters.to}
+              min={filters.from || undefined}
+              onChange={(e) => setFilter("to", e.target.value)}
+              className="mt-1 w-full rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm text-forest-950"
+            />
+          </label>
+          <label className="text-xs text-forest-700">
+            Barangay
+            <select
+              value={filters.barangay}
+              onChange={(e) => setFilter("barangay", e.target.value)}
+              className="mt-1 w-full rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm text-forest-950"
+            >
+              <option value="">All barangays</option>
+              {filterOptions.barangays.map((b) => (
+                <option key={b} value={b}>
+                  {b}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs text-forest-700">
+            Activity
+            <select
+              value={filters.activity}
+              onChange={(e) => setFilter("activity", e.target.value)}
+              className="mt-1 w-full rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm text-forest-950"
+            >
+              <option value="">All activities</option>
+              {filterOptions.activities.map((a) => (
+                <option key={a} value={a}>
+                  {a}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs text-forest-700">
+            Dentist
+            <select
+              value={filters.dentist}
+              onChange={(e) => setFilter("dentist", e.target.value)}
+              className="mt-1 w-full rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm text-forest-950"
+            >
+              <option value="">All dentists</option>
+              {filterOptions.dentists.map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs text-forest-700">
+            Status
+            <select
+              value={filters.status}
+              onChange={(e) => setFilter("status", e.target.value)}
+              className="mt-1 w-full rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm text-forest-950"
+            >
+              <option value="">All statuses</option>
+              {STATUS_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </Card>
+
+    <fieldset disabled={readOnly} style={{ display: "contents" }}>
+      <div className="mt-6 grid lg:grid-cols-3 gap-6 items-start">
         <div className="lg:col-span-2">
           <Card>
             <h3 className="font-display text-lg font-bold text-forest-950">Schedule</h3>
             <p className="text-xs text-forest-700 mt-0.5 mb-4">{monthRangeLabel(schedules)}</p>
-            {schedules.length ? (
+            {filteredSchedules.length ? (
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-forest-700 uppercase text-xs">
@@ -383,7 +528,7 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {schedules.map((s) => {
+                  {filteredSchedules.map((s) => {
                     const day = formatDayLabel(s.visit_date);
                     return (
                       <tr key={s.id} className="border-t border-cream-200 align-top">
@@ -458,7 +603,11 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
                 </tbody>
               </table>
             ) : (
-              <EmptyState>No barangay dates posted yet. Click "Add schedule" to post one.</EmptyState>
+              <EmptyState>
+                {schedules.length
+                  ? "No scheduled dates match these filters."
+                  : 'No barangay dates posted yet. Click "Add schedule" to post one.'}
+              </EmptyState>
             )}
           </Card>
         </div>
@@ -679,7 +828,7 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
           </button>
         </form>
       </Modal>
-    </div>
     </fieldset>
+    </div>
   );
 }
