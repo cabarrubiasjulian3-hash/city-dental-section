@@ -13,7 +13,12 @@ async function request(path, { method = "GET", body, token } = {}) {
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data.error || `Request failed (${res.status})`);
+    const err = new Error(data.error || `Request failed (${res.status})`);
+    // Lets callers react to specific failures — e.g. code "ACCOUNT_EXISTS"
+    // from /auth/register opens the "you already have an account" pop-up.
+    err.status = res.status;
+    err.code = data.code;
+    throw err;
   }
   return data;
 }

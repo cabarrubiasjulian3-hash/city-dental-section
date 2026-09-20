@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Modal from "./Modal";
+import ConfirmDialog from "./ConfirmDialog";
 import RoleToggle from "./RoleToggle";
 import { useAuth } from "../context/AuthContext";
 import { TAYABAS_BARANGAYS } from "../lib/barangays";
@@ -30,6 +31,10 @@ export default function SignupModal({ isOpen, onClose, onSwitchToLogin }) {
   const [doctorForm, setDoctorForm] = useState(EMPTY_DOCTOR_FORM);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // Set when the server says this person already has an account (same email,
+  // or same name/barangay as an account already on file) — shown as a pop-up
+  // that offers to take them to Log in, instead of a small inline error.
+  const [accountExists, setAccountExists] = useState(null);
   // Shown in place of the form once a doctor sign-up succeeds, since that
   // account isn't logged in right away — it needs admin confirmation first.
   const [doctorPendingMessage, setDoctorPendingMessage] = useState("");
@@ -82,7 +87,8 @@ export default function SignupModal({ isOpen, onClose, onSwitchToLogin }) {
         state: { welcome: { matched: result.matched, message: result.message } },
       });
     } catch (err) {
-      setError(err.message);
+      if (err.code === "ACCOUNT_EXISTS") setAccountExists(err.message);
+      else setError(err.message);
     } finally {
       setBusy(false);
     }
@@ -251,6 +257,19 @@ export default function SignupModal({ isOpen, onClose, onSwitchToLogin }) {
           Log in
         </button>
       </p>
+
+      <ConfirmDialog
+        isOpen={!!accountExists}
+        title="You already have an account"
+        message={accountExists}
+        confirmLabel="Log in"
+        cancelLabel="Close"
+        onConfirm={() => {
+          setAccountExists(null);
+          onSwitchToLogin();
+        }}
+        onCancel={() => setAccountExists(null)}
+      />
     </Modal>
   );
 }

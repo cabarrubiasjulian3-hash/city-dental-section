@@ -91,7 +91,7 @@ function samePerson(a, b) {
 }
 
 function absorbLateMatchingRecord(user) {
-  if (user.role !== "patient") return;
+  if (user.role !== "patient") return false;
   const sameIdentity = findCandidatesByIdentity.all(
     user.id,
     norm(user.surname || ""),
@@ -99,7 +99,7 @@ function absorbLateMatchingRecord(user) {
     norm(user.name)
   );
   const candidates = sameIdentity.filter((c) => samePerson(user, c));
-  if (candidates.length !== 1) return; // none, or ambiguous (2+) — leave alone for a human to check
+  if (candidates.length !== 1) return false; // none, or ambiguous (2+) — leave alone for a human to check
 
   const dup = candidates[0];
   const merge = db.transaction(() => {
@@ -111,12 +111,46 @@ function absorbLateMatchingRecord(user) {
   });
   try {
     merge();
+    return true;
   } catch {
     // e.g. a tooth_conditions UNIQUE(patient_id, tooth_number) collision if
     // both rows somehow already had a condition logged for the same tooth —
     // extremely unlikely for a row nobody has ever logged into, but don't
     // fail the login over a best-effort cleanup; just leave it for later.
+    return false;
   }
+}
+
+// --- Server-side record check (runs on EVERY patient login, and again every
+// time the portal is opened with a saved session via GET /auth/me below) ---
+// The patient portal must never trust what the browser remembers about
+// whether someone "has records": a patient can have a clinic record created
+// for them at any time (a walk-in logged by the front desk, an Excel import)
+// without ever opening their portal again. So each time, the SERVER:
+//   1. tries to link any clinic record that turned out to be theirs
+//      (absorbLateMatchingRecord above), then
+//   2. counts the dental records now on their account,
+// and tells the frontend the result so the portal can show it straight away.
+const countDentalRecords = db.prepare("SELECT COUNT(*) AS c FROM dental_records WHERE patient_id = ?");
+
+function checkRecordsOnServer(user) {
+  if (user.role !== "patient") return null;
+  const linkedRecords = absorbLateMatchingRecord(user);
+  const recordCount = countDentalRecords.get(user.id).c;
+  return {
+    hasRecords: recordCount > 0,
+    recordCount,
+    linkedRecords,
+    message: linkedRecords
+      ? recordCount > 0
+        ? `We found ${recordCount} dental record${recordCount === 1 ? "" : "s"} from the clinic that belong to you and linked ${recordCount === 1 ? "it" : "them"} to your account.`
+        : "We found your clinic record and linked it to your account."
+      : null,
+  };
+}
+
+function publicUser(user) {
+  return { id: user.id, name: user.name, email: user.email, role: user.role };
 }
 
 const claimImportedRow = db.prepare(
@@ -127,6 +161,9 @@ const claimImportedRow = db.prepare(
      address = COALESCE(?, address),
      occupation = COALESCE(?, occupation),
      barangay = COALESCE(?, barangay),
+     surname = COALESCE(?, surname),
+     first_name = COALESCE(?, first_name),
+     middle_name = COALESCE(?, middle_name),
      is_pregnant = ?, is_pwd = ?, is_senior_citizen = ?
    WHERE id = ?`
 );
@@ -163,7 +200,7 @@ function registerDoctor(req, res) {
   }
   const existingEmail = db.prepare("SELECT id FROM users WHERE email = ?").get(email);
   if (existingEmail) {
-    return res.status(409).json({ error: "An account with that email already exists." });
+    return res.status(409).json({ error: "An account with that email already exists.", code: "ACCOUNT_EXISTS" });
   }
 
   const code = db.prepare("SELECT * FROM access_codes WHERE code = ?").get(String(accessCode).trim());
@@ -198,9 +235,14 @@ router.post("/register", (req, res) => {
   if (!name || !email || !password) {
     return res.status(400).json({ error: "Name, email, and password are required." });
   }
-  const existingEmail = db.prepare("SELECT id FROM users WHERE email = ?").get(email);
+  const existingEmail = db.prepare("SELECT id, email FROM users WHERE email = ?").get(email);
   if (existingEmail) {
-    return res.status(409).json({ error: "An account with that email already exists." });
+    return res.status(409).json({
+      error: isUnclaimedImportedRow(existingEmail)
+        ? "A clinic record already exists for this email. Please contact the front desk."
+        : "An account with this email already exists. Please log in instead — or use \"Forgot password?\" if you can't remember your password.",
+      code: "ACCOUNT_EXISTS",
+    });
   }
 
   const hash = bcrypt.hashSync(password, 10);
@@ -235,6 +277,7 @@ router.post("/register", (req, res) => {
       return res.status(409).json({
         error:
           "An account already exists for a patient matching this name and barangay in our clinic records. Please log in instead, or contact the front desk if this isn't you.",
+        code: "ACCOUNT_EXISTS",
       });
     }
 
@@ -258,8 +301,9 @@ router.post("/register", (req, res) => {
     const token = signToken(user);
     return res.status(200).json({
       token,
-      user: { id: user.id, name: user.name, email: user.email, role: user.role },
+      user: publicUser(user),
       matched: true,
+      recordCount: countDentalRecords.get(user.id).c,
       message: "We found your existing dental records on file and linked them to your new account.",
     });
   }
@@ -290,8 +334,9 @@ router.post("/register", (req, res) => {
   const token = signToken(user);
   res.status(201).json({
     token,
-    user: { id: user.id, name: user.name, email: user.email, role: user.role },
+    user: publicUser(user),
     matched: false,
+    recordCount: 0,
     message: "No existing dental records were found under this name yet. Your account is created — records will appear here once the clinic logs your first visit.",
   });
 });
@@ -313,9 +358,26 @@ router.post("/login", (req, res) => {
       error: "Your doctor account is awaiting admin confirmation. Please check back once it's been approved.",
     });
   }
-  absorbLateMatchingRecord(user);
+  // Check the clinic's records again on every patient login (see
+  // checkRecordsOnServer above) instead of trusting whatever was true when
+  // they signed up.
+  const session = checkRecordsOnServer(user);
   const token = signToken(user);
-  res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+  res.json({ token, user: publicUser(user), ...(session ? { session } : {}) });
+});
+
+// Re-validates a saved session. A patient who stays logged in (the token
+// lasts 7 days) never hits /login again, so the portal calls this every time
+// it opens: it confirms the account still exists (e.g. wasn't archived),
+// re-runs the same server-side record check as a fresh login, and returns
+// the up-to-date user + record status.
+router.get("/me", requireAuth, (req, res) => {
+  const user = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
+  if (!user || (user.role === "doctor" && user.doctor_status !== "approved")) {
+    return res.status(401).json({ error: "This account is no longer active. Please log in again." });
+  }
+  const session = checkRecordsOnServer(user);
+  res.json({ user: publicUser(user), ...(session ? { session } : {}) });
 });
 
 function maskEmail(email) {

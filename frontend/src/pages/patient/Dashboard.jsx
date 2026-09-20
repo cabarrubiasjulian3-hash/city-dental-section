@@ -1,16 +1,30 @@
 import { useEffect, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
 import { Card, EmptyState, StatCard } from "../../components/ui";
 
 export default function PatientDashboard() {
-  const { user } = useAuth();
+  const { user, sessionInfo, setSessionInfo } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
   const [profile, setProfile] = useState(null);
   const [schedules, setSchedules] = useState([]);
   const [records, setRecords] = useState([]);
+  // Notice banner. Comes from either:
+  //  - sign-up (passed through navigate state), or
+  //  - the server's record check on login / when the portal was opened —
+  //    only shown when that check just linked a clinic record to this account.
   const [welcome, setWelcome] = useState(location.state?.welcome || null);
+  useEffect(() => {
+    if (sessionInfo?.linkedRecords && sessionInfo.message) {
+      setWelcome({ matched: true, message: sessionInfo.message });
+    }
+  }, [sessionInfo]);
+  function dismissWelcome() {
+    setWelcome(null);
+    setSessionInfo?.(null);
+  }
 
   useEffect(() => {
     api.get(`/patients/${user.id}`).then(setProfile).catch(() => {});
@@ -30,9 +44,9 @@ export default function PatientDashboard() {
       <div>
         <h2 className="font-display text-2xl font-bold text-forest-950">Dashboard</h2>
         <p className="text-sm text-forest-700 mt-1">
-          An overview of your dental profile and records. Head to{" "}
-          <Link to="/patient/profile" className="underline font-medium">My Profile</Link> to edit your personal
-          information. For your barangay's next dental mission date, see below.
+          An overview of your dental profile and records. To see your full details, head to{" "}
+          <Link to="/patient/profile" className="underline font-medium">My Profile</Link> (view-only — the front
+          desk updates it for you). For your barangay's next dental mission date, see below.
         </p>
       </div>
 
@@ -45,7 +59,7 @@ export default function PatientDashboard() {
           }`}
         >
           <p>{welcome.message}</p>
-          <button onClick={() => setWelcome(null)} className="text-xs underline shrink-0">
+          <button onClick={dismissWelcome} className="text-xs underline shrink-0">
             Dismiss
           </button>
         </div>
@@ -64,7 +78,7 @@ export default function PatientDashboard() {
       )}
 
       <div className="grid md:grid-cols-2 gap-6">
-        <Card title="Patient Record Summary" action={<Link to="/patient/profile" className="text-xs underline">Edit</Link>}>
+        <Card title="Patient Record Summary">
           {profile ? (
             <div className="flex gap-4">
               <div className="w-16 h-16 rounded-xl bg-cream-200 flex items-center justify-center text-3xl">🙂</div>
@@ -118,7 +132,12 @@ export default function PatientDashboard() {
               </thead>
               <tbody>
                 {records.slice(0, 3).map((r) => (
-                  <tr key={r.id} className="border-t border-cream-200">
+                  // Clickable: opens that record (with the tooth chart) on the Dental Record page.
+                  <tr
+                    key={r.id}
+                    onClick={() => navigate("/patient/dental-record", { state: { openRecordId: r.id } })}
+                    className="border-t border-cream-200 cursor-pointer hover:bg-cream-100"
+                  >
                     <td className="py-2">{r.procedure}</td>
                     <td className="py-2">{r.record_date}</td>
                   </tr>

@@ -4,6 +4,7 @@ import { useAuth } from "../context/AuthContext";
 import { TAYABAS_BARANGAYS } from "../lib/barangays";
 import { composeFullName } from "../lib/name";
 import RoleToggle from "../components/RoleToggle";
+import ConfirmDialog from "../components/ConfirmDialog";
 
 const EMPTY_DOCTOR_FORM = { name: "", email: "", password: "", confirmPassword: "", accessCode: "" };
 
@@ -30,6 +31,9 @@ export default function Signup() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [doctorPendingMessage, setDoctorPendingMessage] = useState("");
+  // Set when the server says this person already has an account — shown as a
+  // pop-up that offers to take them to Log in.
+  const [accountExists, setAccountExists] = useState(null);
 
   function update(field) {
     return (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
@@ -72,7 +76,8 @@ export default function Signup() {
         state: { welcome: { matched: result.matched, message: result.message } },
       });
     } catch (err) {
-      setError(err.message);
+      if (err.code === "ACCOUNT_EXISTS") setAccountExists(err.message);
+      else setError(err.message);
     } finally {
       setBusy(false);
     }
@@ -230,6 +235,16 @@ export default function Signup() {
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        isOpen={!!accountExists}
+        title="You already have an account"
+        message={accountExists}
+        confirmLabel="Log in"
+        cancelLabel="Close"
+        onConfirm={() => navigate("/login")}
+        onCancel={() => setAccountExists(null)}
+      />
     </div>
   );
 }
