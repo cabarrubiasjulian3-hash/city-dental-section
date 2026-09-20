@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Archive as ArchiveIcon } from "lucide-react";
 import { api } from "../../lib/api";
 import { Card, EmptyState } from "../../components/ui";
 
@@ -166,8 +167,14 @@ export default function AdminDoctorAccess() {
                   </td>
                   <td className="py-3 text-right">
                     {c.status !== "used" && (
-                      <button onClick={() => deleteCode(c.id)} className="text-xs underline text-red-700">
-                        Delete
+                      <button
+                        type="button"
+                        title="Archive access code"
+                        aria-label="Archive access code"
+                        onClick={() => deleteCode(c.id)}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-full text-red-700 hover:bg-red-50"
+                      >
+                        <ArchiveIcon size={16} />
                       </button>
                     )}
                   </td>

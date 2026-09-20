@@ -1,8 +1,9 @@
 import jwt from "jsonwebtoken";
 import db from "../db.js";
 
-// Keeps a log of what DOCTORS change on patient records, so the admin's
-// notification bell can say "Dr. Ana Lopez updated a patient record".
+// Keeps a log of what DOCTORS change on patient records and on the barangay
+// schedule, so the notification bell (admin AND doctors) can say
+// "Dr. Ana Lopez updated a patient record".
 //
 // It watches the requests instead of touching each route: mount it ONCE in
 // server.js, AFTER express.json() and BEFORE the routes —
@@ -80,6 +81,32 @@ function describe(req) {
     if (req.method === "PATCH") return { ...base, action: "updated_service_record", detail: [record?.procedure, changedFields].filter(Boolean).join(" · ") };
     if (req.method === "DELETE") return { ...base, action: "archived_service_record", detail: record?.procedure || "" };
   }
+
+  if (root === "barangay-schedule") {
+    if (req.method === "POST" && !second) {
+      return { action: "created_schedule", detail: [body.barangay_name, body.visit_date].filter(Boolean).join(" · ") };
+    }
+    const row = db.prepare(`SELECT barangay_name, visit_date FROM barangay_schedule WHERE id = ?`).get(Number(second));
+    const detail = row ? [row.barangay_name, row.visit_date].filter(Boolean).join(" · ") : "";
+    if (req.method === "PATCH") return { action: "updated_schedule", detail };
+    if (req.method === "DELETE") return { action: "archived_schedule", detail };
+  }
+
+  if (root === "recurring-schedule") {
+    if (req.method === "POST" && !second) {
+      return { action: "created_rotation", detail: body.barangay_name || "" };
+    }
+    const rule = db.prepare(`SELECT barangay_name, active FROM recurring_barangay_schedule WHERE id = ?`).get(Number(second));
+    const detail = rule?.barangay_name || "";
+    if (req.method === "PATCH") {
+      const keys = Object.keys(body);
+      if (keys.length === 1 && keys[0] === "active") {
+        return { action: body.active ? "resumed_rotation" : "paused_rotation", detail };
+      }
+      return { action: "updated_rotation", detail };
+    }
+    if (req.method === "DELETE") return { action: "archived_rotation", detail };
+  }
   return null;
 }
 
@@ -87,7 +114,7 @@ export function auditDoctorChanges(req, res, next) {
   try {
     if (!["POST", "PATCH", "PUT", "DELETE"].includes(req.method)) return next();
     const root = req.path.split("/").filter(Boolean)[0];
-    if (root !== "patients" && root !== "dental-records") return next();
+    if (!["patients", "dental-records", "barangay-schedule", "recurring-schedule"].includes(root)) return next();
 
     // Same token the routes use; if it's missing/invalid the route itself
     // will reject the request, so there's nothing to log.

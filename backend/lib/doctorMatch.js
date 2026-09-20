@@ -42,6 +42,20 @@ export function getDoctorPatientIds(db, doctorName) {
   return ids;
 }
 
+// The patients a doctor may open and edit: their own (dentist name on a
+// service record) PLUS any patient record this doctor created themselves —
+// so a doctor can keep working on a patient they just added even when the
+// first service record names a different dentist.
+export function getDoctorAccessiblePatientIds(db, doctor) {
+  const ids = getDoctorPatientIds(db, doctor.name);
+  if (doctor.id != null) {
+    for (const r of db.prepare(`SELECT id FROM users WHERE role = 'patient' AND created_by_id = ?`).all(doctor.id)) {
+      ids.add(r.id);
+    }
+  }
+  return ids;
+}
+
 // For admin's Messages list: which doctor (by name) is "assigned" to a given
 // patient, based on their most recent visit's dentist field. If that text
 // happens to match a real doctor *account*, we show the account's own name

@@ -14,6 +14,10 @@ import { api } from "../../lib/api";
 
 const POLL_MS = 5000; // how often to check for new messages
 
+// The conversation has two sides: the PATIENT on the left, and the clinic on
+// the right — the doctors' replies AND the chatbot's automated replies sit
+// together on the doctor's side, so it reads as one conversation.
+
 // SQLite's datetime('now') is UTC, written "YYYY-MM-DD HH:MM:SS" with no zone.
 function parseServerTime(value) {
   const d = new Date(`${String(value).replace(" ", "T")}Z`);
@@ -178,23 +182,28 @@ export default function AdminMessages({ readOnly = false }) {
               <div ref={scrollRef} className="flex-1 overflow-y-auto p-5 space-y-3">
                 {messages.length === 0 && <p className="text-center text-sm text-forest-600">No messages yet.</p>}
                 {messages.map((m) => {
-                  // Admin and doctor replies are "outgoing" bubbles (with the
-                  // sender's name above) — only the patient's own messages sit
-                  // on the left.
-                  const outgoing = m.sender === "admin" || m.sender === "doctor";
-                  const isMine = outgoing && m.sender_name && m.sender_name === user?.name;
+                  // Doctor/admin replies and the chatbot's automated replies
+                  // are all on the clinic's (right) side — only the patient's
+                  // own messages sit on the left.
+                  const isBot = m.sender === "bot";
+                  const outgoing = isBot || m.sender === "admin" || m.sender === "doctor";
+                  const isMine = !isBot && outgoing && m.sender_name && m.sender_name === user?.name;
                   return (
                     <div key={m.id} className={`flex ${outgoing ? "justify-end" : "justify-start"}`}>
                       <div className={`max-w-md flex flex-col ${outgoing ? "items-end" : "items-start"}`}>
                         {outgoing && (
                           <span className="text-[11px] font-semibold text-forest-700 mb-1 px-1">
-                            {staffLabel(m.sender_name, m.sender)}
+                            {isBot ? "Automated reply" : staffLabel(m.sender_name, m.sender)}
                             {isMine ? " (you)" : ""}
                           </span>
                         )}
                         <div
                           className={`px-4 py-2 rounded-2xl text-sm whitespace-pre-line break-words ${
-                            outgoing ? "bg-brand-900 text-brand-50" : "bg-cream-200 text-forest-950"
+                            isBot
+                              ? "bg-cream-50 border-2 border-leaf-300 text-forest-950"
+                              : outgoing
+                              ? "bg-brand-900 text-brand-50"
+                              : "bg-cream-200 text-forest-950"
                           }`}
                         >
                           {m.body}

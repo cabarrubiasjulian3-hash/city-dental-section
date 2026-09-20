@@ -12,6 +12,34 @@ if (!messageColumns.includes("sender_name")) {
   db.exec("ALTER TABLE messages ADD COLUMN sender_name TEXT");
 }
 
+// The automated assistant's replies live in their own table (the messages
+// table only allows patient/admin/doctor as a sender). They're saved by the
+// patient's chat right after the bot answers, so the doctors can see the bot's
+// replies in the same conversation. reply_to = the patient message it answered.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS bot_replies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    patient_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    reply_to INTEGER,
+    body TEXT NOT NULL,
+    meta TEXT,
+    sent_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_bot_replies_patient ON bot_replies(patient_id);
+`);
+
+// A bot reply as it goes out to the browsers: same shape as a message, with
+// sender "bot" and a string id so it can never clash with a message id.
+function botRow(r) {
+  let meta = {};
+  try {
+    meta = r.meta ? JSON.parse(r.meta) : {};
+  } catch {
+    meta = {};
+  }
+  return { id: `bot-${r.id}`, patient_id: r.patient_id, sender: "bot", sender_name: null, body: r.body, sent_at: r.sent_at, reply_to: r.reply_to, link: meta.link || null, prefill: meta.prefill || null };
+}
+
 const router = Router();
 router.use(requireAuth);
 
@@ -93,7 +121,58 @@ router.get("/", (req, res) => {
   if (!assertDoctorCanAccessPatient(req, res, patientId)) return;
 
   const rows = db.prepare(`SELECT * FROM messages WHERE patient_id = ? ORDER BY sent_at ASC, id ASC`).all(patientId);
-  res.json(rows);
+  const bots = db.prepare(`SELECT * FROM bot_replies WHERE patient_id = ? ORDER BY id ASC`).all(patientId);
+
+  // Put each bot reply right under the patient message it answered, so the
+  // conversation reads: patient → automated reply → doctor.
+  const botsByMessage = new Map();
+  const orphans = [];
+  const messageIds = new Set(rows.map((m) => m.id));
+  for (const b of bots) {
+    if (b.reply_to != null && messageIds.has(b.reply_to)) {
+      if (!botsByMessage.has(b.reply_to)) botsByMessage.set(b.reply_to, []);
+      botsByMessage.get(b.reply_to).push(botRow(b));
+    } else {
+      orphans.push(botRow(b));
+    }
+  }
+  const merged = [];
+  for (const m of rows) {
+    merged.push(m);
+    for (const b of botsByMessage.get(m.id) || []) merged.push(b);
+  }
+  merged.push(...orphans);
+  res.json(merged);
+});
+
+// The patient's chat saves the automated reply it just showed, so doctors see
+// it too. Patients only; it can only answer one of the patient's OWN messages,
+// and only once per message.
+router.post("/bot-reply", (req, res) => {
+  if (req.user.role !== "patient") return res.status(403).json({ error: "Patients only." });
+  const body = String(req.body?.body ?? "").trim();
+  if (!body) return res.status(400).json({ error: "body is required." });
+  if (body.length > MAX_BODY_LENGTH * 2) return res.status(400).json({ error: "Reply is too long." });
+
+  const replyTo = Number(req.body?.reply_to);
+  const original = db
+    .prepare(`SELECT id FROM messages WHERE id = ? AND patient_id = ? AND sender = 'patient'`)
+    .get(replyTo, req.user.id);
+  if (!original) return res.status(404).json({ error: "Message not found." });
+
+  const existing = db.prepare(`SELECT * FROM bot_replies WHERE reply_to = ? AND patient_id = ?`).get(replyTo, req.user.id);
+  if (existing) return res.json(botRow(existing));
+
+  const link = req.body?.link && typeof req.body.link === "object"
+    ? { to: String(req.body.link.to || "").slice(0, 200), label: String(req.body.link.label || "").slice(0, 100) }
+    : null;
+  const prefill = req.body?.prefill ? String(req.body.prefill).slice(0, MAX_BODY_LENGTH) : null;
+  const meta = JSON.stringify({ link: link && link.to ? link : null, prefill });
+
+  const info = db
+    .prepare(`INSERT INTO bot_replies (patient_id, reply_to, body, meta) VALUES (?, ?, ?, ?)`)
+    .run(req.user.id, replyTo, body, meta);
+  res.status(201).json(botRow(db.prepare(`SELECT * FROM bot_replies WHERE id = ?`).get(info.lastInsertRowid)));
 });
 
 // Send a message. A patient's message goes into their own thread (where every

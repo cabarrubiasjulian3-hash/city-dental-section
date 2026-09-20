@@ -3,7 +3,6 @@ import { Printer, Download } from "lucide-react";
 import { api } from "../../lib/api";
 import { Card, EmptyState } from "../../components/ui";
 import EditableCell from "../../components/EditableCell";
-import { LineChart } from "../../components/Charts";
 
 // Same category columns, same order, as the paper e-FHSIS form. "pregnant"
 // only has an "f" sex because the paper form only has a female column for
@@ -127,15 +126,11 @@ function TotalsRow({ label, totals }) {
   );
 }
 
-// Which part of the on-screen summary to show — the page got long with all
-// three parts + the trend chart on top of each other, so they can be viewed
-// one at a time.
+// Which part of the on-screen summary to show — one at a time.
 const PART_FILTERS = [
-  { key: "all", label: "All parts" },
   { key: "I", label: "Part I" },
   { key: "II", label: "Part II" },
   { key: "III", label: "Part III" },
-  { key: "trend", label: "Trend" },
 ];
 
 export default function AdminMonthlyReport({ readOnly = false }) {
@@ -144,13 +139,12 @@ export default function AdminMonthlyReport({ readOnly = false }) {
   const [dentistRows, setDentistRows] = useState([]);
   const [barangayRows, setBarangayRows] = useState([]);
   const [servicesRendered, setServicesRendered] = useState([]);
-  const [trend, setTrend] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  // Summary filters: which part(s) to show, and (for Part III) which dentist.
-  const [part, setPart] = useState("all");
+  // Summary filters: which part to show, and (for Part III) which dentist.
+  const [part, setPart] = useState("I");
   const [dentistFilter, setDentistFilter] = useState("");
-  const show = (key) => part === "all" || part === key;
+  const show = (key) => part === key;
 
   function load() {
     setLoading(true);
@@ -159,13 +153,11 @@ export default function AdminMonthlyReport({ readOnly = false }) {
       api.get(`/monthly-reports?month=${month}&scope=dentist`),
       api.get(`/monthly-reports?month=${month}&scope=barangay`),
       api.get(`/monthly-reports/services-rendered?month=${month}`),
-      api.get(`/monthly-reports/trend?month=${month}`),
     ])
-      .then(([d, b, sr, tr]) => {
+      .then(([d, b, sr]) => {
         setDentistRows(d.rows);
         setBarangayRows(b.rows);
         setServicesRendered(sr.servicesRendered);
-        setTrend(tr.trend);
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
@@ -230,7 +222,7 @@ export default function AdminMonthlyReport({ readOnly = false }) {
         </div>
       </div>
 
-      {/* Filters for the on-screen summary below (Parts I–III + Trend). */}
+      {/* Filters for the on-screen summary below (Parts I–III). */}
       <Card className="print:hidden">
         <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
           <label className="text-xs text-forest-700">
@@ -284,11 +276,11 @@ export default function AdminMonthlyReport({ readOnly = false }) {
         </div>
       </Card>
 
-      {/* Printable summary — Parts I–III + Trend, matching the paper e-FHSIS
+      {/* Printable summary — Parts I–III, matching the paper e-FHSIS
           layout. This is for on-screen viewing only; Print / Export prints
           the By Dentist / By Barangay tab instead (see below), so it's
           hidden from the print output here. */}
-      <div className={`${part === "all" ? "grid lg:grid-cols-2 gap-5" : "space-y-5"} print:hidden`}>
+      <div className="space-y-5 print:hidden">
         {show("I") && (
         <Card title="Part I — Recipients of Basic Oral Health Care (BOHC)" subtitle="Tally per age group, by sex">
           <table className="w-full text-sm">
@@ -389,16 +381,6 @@ export default function AdminMonthlyReport({ readOnly = false }) {
         </div>
         )}
       </div>
-
-      {show("trend") && (
-      <Card title="Trend" subtitle="Total clients served, last 6 months" className="print:hidden">
-        {trend.some((m) => m.value > 0) ? (
-          <LineChart data={trend} />
-        ) : (
-          <EmptyState>Not enough data yet for a trend.</EmptyState>
-        )}
-      </Card>
-      )}
 
       <div className="flex items-center justify-between flex-wrap gap-3 print:hidden">
         <p className="text-sm text-forest-700 max-w-2xl">

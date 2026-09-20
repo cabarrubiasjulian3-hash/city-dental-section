@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
+import { Pencil, Archive as ArchiveIcon, Pause, Play } from "lucide-react";
 import { api } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
 import { Card, StatCard, Badge, EmptyState } from "../../components/ui";
 import EditableCell from "../../components/EditableCell";
+import EditedBy from "../../components/EditedBy";
 import Modal from "../../components/Modal";
 import { IconCalendar } from "../../components/icons";
 import { TAYABAS_BARANGAYS } from "../../lib/barangays";
@@ -31,6 +33,16 @@ const ACTIVITY_OPTIONS = [
 // "Set up weekly rotation" is for the recurring, routine clinic days a
 // dentist holds in a barangay — just the 3 regular clinical services.
 const ROTATION_ACTIVITY_OPTIONS = ["Tooth Extraction", "Tooth Consultation", "E-Consultation / E-Konsulta"];
+
+// Combined free-typed activity names that were on older schedule entries.
+// They're left out of the Activity filter dropdown (the entries themselves
+// are untouched).
+const HIDDEN_FILTER_ACTIVITIES = new Set([
+  "tooth extraction, consultation",
+  "tooth extraction, dental cleaning, oral examination",
+  "dental cleaning, filling",
+  "dental examination, filling",
+]);
 
 const EMPTY_FILTERS = { from: "", to: "", barangay: "", activity: "", dentist: "", status: "" };
 
@@ -93,10 +105,12 @@ function withCurrent(options, current) {
 }
 
 export default function AdminBarangaySchedule({ readOnly = false }) {
-  // Remove buttons are admin-only (the API enforces it too); removed items go
+  // Archive buttons are admin-only (the API enforces it too); archived items go
   // to the Archive page and can be restored from there.
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
+  // Doctors can edit entries and pause/resume rotations; only admins archive.
+  const canEdit = user?.role === "admin" || user?.role === "doctor";
   const [schedules, setSchedules] = useState([]);
   const [populationByBarangay, setPopulationByBarangay] = useState({});
   const [dentists, setDentists] = useState([]);
@@ -284,7 +298,9 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
     const uniq = (list) => [...new Set(list.filter(Boolean))].sort((a, b) => a.localeCompare(b));
     return {
       barangays: uniq(schedules.map((s) => s.barangay_name)),
-      activities: uniq([...ACTIVITY_OPTIONS, ...schedules.map((s) => s.services)]),
+      activities: uniq([...ACTIVITY_OPTIONS, ...schedules.map((s) => s.services)]).filter(
+        (a) => !HIDDEN_FILTER_ACTIVITIES.has(a.trim().toLowerCase())
+      ),
       dentists: uniq([...dentists, ...schedules.map((s) => s.dentist)]),
     };
   }, [schedules, dentists]);
@@ -376,23 +392,39 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
                   <p className="text-xs text-forest-700 truncate">
                     {[r.dentist, r.services, r.time_range].filter(Boolean).join(" · ") || "No details set"}
                   </p>
+                  <EditedBy row={r} />
                 </div>
-                <div className="flex items-center gap-3 shrink-0">
+                <div className="flex items-center gap-1 shrink-0">
                   <button
+                    type="button"
+                    title={r.active ? "Pause rotation" : "Resume rotation"}
+                    aria-label={r.active ? "Pause rotation" : "Resume rotation"}
                     onClick={() => toggleRecurringRule(r.id, !r.active)}
-                    className="text-xs underline text-forest-800"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-full text-forest-800 hover:bg-cream-200"
                   >
-                    {r.active ? "Pause" : "Resume"}
+                    {r.active ? <Pause size={16} /> : <Play size={16} />}
                   </button>
+                  {canEdit && (
+                    <button
+                      type="button"
+                      title="Edit rotation"
+                      aria-label="Edit rotation"
+                      onClick={() => openEditRule(r)}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-full text-forest-800 hover:bg-cream-200"
+                    >
+                      <Pencil size={16} />
+                    </button>
+                  )}
                   {isAdmin && (
-                    <>
-                      <button onClick={() => openEditRule(r)} className="text-xs underline text-forest-800">
-                        Edit
-                      </button>
-                      <button onClick={() => removeRecurringRule(r.id)} className="text-xs underline text-red-700">
-                        Remove
-                      </button>
-                    </>
+                    <button
+                      type="button"
+                      title="Archive rotation"
+                      aria-label="Archive rotation"
+                      onClick={() => removeRecurringRule(r.id)}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-full text-red-700 hover:bg-red-50"
+                    >
+                      <ArchiveIcon size={16} />
+                    </button>
                   )}
                 </div>
               </div>
@@ -557,6 +589,7 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
                             placeholder="e.g. Dental Mission / QIK"
                             onSave={(v) => updateSchedule(s.id, "services", v)}
                           />
+                          <EditedBy row={s} className="pl-2" />
                         </td>
                         <td className="py-2 pr-2 text-forest-700">
                           <EditableCell
@@ -586,14 +619,28 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
                           </div>
                         </td>
                         <td className="py-2 text-right align-middle">
-                          {isAdmin && (
-                            <div className="flex flex-col items-end gap-1">
-                              <button onClick={() => openEditSchedule(s)} className="text-xs underline text-forest-800">
-                                Edit
+                          {canEdit && (
+                            <div className="inline-flex items-center gap-1">
+                              <button
+                                type="button"
+                                title="Edit schedule entry"
+                                aria-label="Edit schedule entry"
+                                onClick={() => openEditSchedule(s)}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-forest-800 hover:bg-cream-200"
+                              >
+                                <Pencil size={16} />
                               </button>
-                              <button onClick={() => removeSchedule(s.id)} className="text-xs underline text-red-700">
-                                Remove
-                              </button>
+                              {isAdmin && (
+                                <button
+                                  type="button"
+                                  title="Archive schedule entry"
+                                  aria-label="Archive schedule entry"
+                                  onClick={() => removeSchedule(s.id)}
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-full text-red-700 hover:bg-red-50"
+                                >
+                                  <ArchiveIcon size={16} />
+                                </button>
+                              )}
                             </div>
                           )}
                         </td>

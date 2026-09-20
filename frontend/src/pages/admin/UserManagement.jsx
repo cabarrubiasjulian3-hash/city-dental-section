@@ -1,28 +1,27 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { Trash2 } from "lucide-react";
+import { Archive as ArchiveIcon } from "lucide-react";
 import { api } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
 import { Card, EmptyState } from "../../components/ui";
 import ConfirmDialog from "../../components/ConfirmDialog";
 
-// Admin → User Management. Every account in the system in one place, with
-// filters so it's clear who is who:
-//   - Doctors & Staff        doctor and admin accounts
+// Admin → User Management. Every doctor and patient who made an account, with
+// filters so it's clear who is who (admin accounts, and patient records the
+// clinic added without the person signing up, aren't listed):
+//   - Doctors                doctor accounts
 //   - Patients               patient accounts that already have service records
 //   - No records yet         "incoming" patients: they made an account but
 //                            nothing has been recorded for them yet
-// The admin can delete an account that shouldn't be there (e.g. an
-// unauthorized sign-up). Two safety rules, enforced by the server as well:
-// admin accounts and your own account can't be deleted, and a patient who
-// already has records is archived from Patient Management instead (deleting
-// them here would destroy their records).
+// The admin can archive an account that shouldn't be there (e.g. an
+// unauthorized sign-up). The account moves to the Archive page and can be
+// restored from there. Admin accounts and your own account can't be archived.
 
 const PAGE_SIZE = 100;
 
 const GROUPS = [
   { key: "all", label: "All" },
-  { key: "staff", label: "Doctors & Staff" },
+  { key: "staff", label: "Doctors" },
   { key: "patients", label: "Patients" },
   { key: "incoming", label: "No records yet" },
 ];
@@ -39,10 +38,19 @@ const STATUS_STYLES = {
   rejected: "bg-red-100 text-red-700",
 };
 
+// The server decides which section an account belongs in (account_group) —
+// it classifies each person when they sign up or log in, and again every time
+// this list is loaded. The role/record_count rule below is only a fallback
+// for an older server that doesn't send account_group yet.
 function groupOf(u) {
+  if (u.account_group) return u.account_group;
   if (u.role === "doctor" || u.role === "admin") return "staff";
   return u.record_count > 0 ? "patients" : "incoming";
 }
+
+// How often the list quietly re-checks the server so new sign-ups and logins
+// land in the right section without a manual refresh.
+const REFRESH_MS = 15000;
 
 // SQLite's datetime('now') is UTC without a "Z" — add it so the browser
 // shows the viewer's local time.
@@ -52,13 +60,10 @@ function formatDate(value) {
   return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString([], { dateStyle: "medium" });
 }
 
-// Why the delete button is unavailable for a row (or null if it's allowed).
-function deleteBlockedReason(u, currentUserId) {
-  if (u.id === currentUserId) return "You can't delete your own account.";
-  if (u.role === "admin") return "Admin accounts can't be deleted here.";
-  if (u.role === "patient" && u.record_count > 0) {
-    return "This patient has service records — archive them from Patient Management instead.";
-  }
+// Why the archive button is unavailable for a row (or null if it's allowed).
+function archiveBlockedReason(u, currentUserId) {
+  if (u.id === currentUserId) return "You can't archive your own account.";
+  if (u.role === "admin") return "Admin accounts can't be archived here.";
   return null;
 }
 
@@ -71,14 +76,32 @@ export default function AdminUserManagement() {
   const [limit, setLimit] = useState(PAGE_SIZE);
   const [message, setMessage] = useState(null); // { type: "success" | "error", text }
   const [confirmUser, setConfirmUser] = useState(null);
-  const [deleting, setDeleting] = useState(false);
+  const [archiving, setArchiving] = useState(false);
 
-  useEffect(() => {
-    api
+  // First load shows errors; the quiet background refreshes below don't.
+  function loadUsers({ quiet = false } = {}) {
+    return api
       .get("/users")
       .then(setUsers)
-      .catch((err) => setMessage({ type: "error", text: err.message || "Could not load the users." }))
-      .finally(() => setLoading(false));
+      .catch((err) => {
+        if (!quiet) setMessage({ type: "error", text: err.message || "Could not load the users." });
+      })
+      .finally(() => {
+        if (!quiet) setLoading(false);
+      });
+  }
+
+  useEffect(() => {
+    loadUsers();
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") loadUsers({ quiet: true });
+    }, REFRESH_MS);
+    const onFocus = () => loadUsers({ quiet: true });
+    window.addEventListener("focus", onFocus);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+    };
   }, []);
 
   // Start from the first page again whenever the filter/search changes.
@@ -101,17 +124,17 @@ export default function AdminUserManagement() {
     });
   }, [users, group, search]);
 
-  async function deleteUser(target) {
+  async function archiveUser(target) {
     setMessage(null);
-    setDeleting(true);
+    setArchiving(true);
     try {
       await api.del(`/users/${target.id}`);
       setUsers((list) => list.filter((u) => u.id !== target.id));
-      setMessage({ type: "success", text: `${target.name}'s account was deleted.` });
+      setMessage({ type: "success", text: `${target.name}'s account was moved to the Archive.` });
     } catch (err) {
-      setMessage({ type: "error", text: err.message || "Could not delete that account." });
+      setMessage({ type: "error", text: err.message || "Could not archive that account." });
     } finally {
-      setDeleting(false);
+      setArchiving(false);
       setConfirmUser(null);
     }
   }
@@ -121,8 +144,8 @@ export default function AdminUserManagement() {
       <div>
         <h2 className="font-display text-2xl font-bold text-forest-950">User Management</h2>
         <p className="text-sm text-forest-700 mt-1">
-          See who has an account — doctors and staff, patients, and patients who signed up but have no records yet —
-          and delete accounts that shouldn't be here. Approve or reject doctor sign-ups in{" "}
+          See the doctors and patients who made an account — including patients who signed up but have no records yet —
+          and archive accounts that shouldn't be here. Approve or reject doctor sign-ups in{" "}
           <Link to="/admin/doctor-access" className="underline font-semibold">
             Doctor Access
           </Link>
@@ -188,7 +211,7 @@ export default function AdminUserManagement() {
                 </thead>
                 <tbody>
                   {visible.slice(0, limit).map((u) => {
-                    const blocked = deleteBlockedReason(u, me?.id);
+                    const blocked = archiveBlockedReason(u, me?.id);
                     return (
                       <tr key={u.id} className="border-t border-cream-200 align-top">
                         <td className="py-3 pr-3">
@@ -233,12 +256,12 @@ export default function AdminUserManagement() {
                           <button
                             type="button"
                             disabled={!!blocked}
-                            title={blocked || "Delete this account"}
-                            aria-label={blocked ? `Can't delete ${u.name}` : `Delete ${u.name}`}
+                            title={blocked || "Archive this account"}
+                            aria-label={blocked ? `Can't archive ${u.name}` : `Archive ${u.name}`}
                             onClick={() => setConfirmUser(u)}
                             className="inline-flex h-8 w-8 items-center justify-center rounded-full text-red-700 hover:bg-red-50 disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed"
                           >
-                            <Trash2 size={16} />
+                            <ArchiveIcon size={16} />
                           </button>
                         </td>
                       </tr>
@@ -270,18 +293,20 @@ export default function AdminUserManagement() {
 
       <ConfirmDialog
         isOpen={!!confirmUser}
-        title="Delete this account?"
+        title="Archive this account?"
         message={
           confirmUser &&
-          `${confirmUser.name} (${confirmUser.email}) will be permanently deleted${
-            confirmUser.role === "doctor" ? " and won't be able to log in anymore" : ""
-          }.\n\nThis can't be undone.`
+          `${confirmUser.name} (${confirmUser.email}) will be moved to the Archive and won't be able to log in anymore${
+            confirmUser.role === "patient" && confirmUser.record_count > 0
+              ? `, together with their ${confirmUser.record_count} service record${confirmUser.record_count === 1 ? "" : "s"}`
+              : ""
+          }.\n\nYou can restore it anytime from the Archive page.`
         }
-        confirmLabel="Delete account"
+        confirmLabel="Archive"
         tone="danger"
-        busy={deleting}
-        onConfirm={() => deleteUser(confirmUser)}
-        onCancel={() => !deleting && setConfirmUser(null)}
+        busy={archiving}
+        onConfirm={() => archiveUser(confirmUser)}
+        onCancel={() => !archiving && setConfirmUser(null)}
       />
     </div>
   );

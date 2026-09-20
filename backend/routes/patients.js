@@ -4,7 +4,8 @@ import db from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { calcAge } from "../lib/age.js";
 import { importWorkbookBuffer } from "../lib/importExcel.js";
-import { getDoctorPatientIds } from "../lib/doctorMatch.js";
+import { getDoctorAccessiblePatientIds } from "../lib/doctorMatch.js";
+import { stampEdit } from "../lib/editStamp.js";
 import { archivePatient } from "../lib/archive.js";
 import ExcelJS from "exceljs";
 import bcrypt from "bcryptjs";
@@ -13,6 +14,13 @@ const router = Router();
 router.use(requireAuth);
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+// Admin can edit any patient. A doctor can edit their own patients (dentist
+// name on a service record) and any record they created themselves.
+function canEditPatient(req, patientId) {
+  if (req.user.role === "admin") return true;
+  return getDoctorAccessiblePatientIds(db, req.user).has(patientId);
+}
 
 function withAge(patient) {
   return { ...patient, age: calcAge(patient.birthdate) };
@@ -48,6 +56,7 @@ router.get("/", requireRole("admin", "doctor"), (req, res) => {
               u.surname, u.first_name, u.middle_name, u.place_of_birth, u.parent_guardian,
               u.cellphone_no,
               u.is_pregnant, u.is_senior_citizen, u.is_pwd, u.created_at,
+              u.last_edited_by, u.last_edited_role, u.last_edited_at,
               (SELECT COUNT(*) FROM dental_records d WHERE d.patient_id = u.id) AS visit_count,
               (SELECT d.procedure FROM dental_records d WHERE d.patient_id = u.id
                  ORDER BY d.record_date DESC, d.id DESC LIMIT 1) AS latest_procedure,
@@ -70,7 +79,7 @@ router.get("/", requireRole("admin", "doctor"), (req, res) => {
 
   let result = rows.map(withAge);
   if (req.user.role === "doctor") {
-    const myPatientIds = getDoctorPatientIds(db, req.user.name);
+    const myPatientIds = getDoctorAccessiblePatientIds(db, req.user);
     result = result.filter((p) => myPatientIds.has(p.id));
   }
   res.json(result);
@@ -194,8 +203,11 @@ router.get("/export/xlsx", requireRole("admin"), async (req, res) => {
 // conforme, and cell phone number) directly, spreadsheet-style, from the
 // Patient Management table. Patients no longer edit this themselves —
 // their "My Profile" page is view-only.
-router.patch("/:id", requireRole("admin"), (req, res) => {
+router.patch("/:id", requireRole("admin", "doctor"), (req, res) => {
   const id = Number(req.params.id);
+  if (!canEditPatient(req, id)) {
+    return res.status(403).json({ error: "You can only edit your own patients." });
+  }
   const {
     name, email, barangay, is_pregnant, is_senior_citizen, is_pwd,
     address, occupation, sex, birthdate, surname, first_name,
@@ -306,12 +318,14 @@ router.patch("/:id", requireRole("admin"), (req, res) => {
     conforme_name ?? null,
     id
   );
+  stampEdit("users", id, req.user);
 
   const patient = db
     .prepare(
       `SELECT id, name, email, birthdate, sex, address, occupation, barangay,
               surname, first_name, middle_name, place_of_birth, parent_guardian, cellphone_no,
               is_pregnant, is_senior_citizen, is_pwd, created_at,
+              last_edited_by, last_edited_role, last_edited_at,
               is_nhts_pr, is_4ps, is_indigenous_people, philhealth_no, sss_no, gsis_no,
               allergies, has_hypertension_cva, has_diabetes_mellitus, has_blood_disorders,
               has_cardio_heart_disease, has_thyroid_disorders, hepatitis, malignancy,
@@ -329,7 +343,7 @@ router.get("/:id", (req, res) => {
   const id = Number(req.params.id);
   const isOwnAccount = req.user.id === id;
   const isAdmin = req.user.role === "admin";
-  const isTheirPatient = req.user.role === "doctor" && getDoctorPatientIds(db, req.user.name).has(id);
+  const isTheirPatient = req.user.role === "doctor" && getDoctorAccessiblePatientIds(db, req.user).has(id);
   if (!isAdmin && !isOwnAccount && !isTheirPatient) {
     return res.status(403).json({ error: "Not authorized." });
   }
@@ -338,6 +352,7 @@ router.get("/:id", (req, res) => {
       `SELECT id, name, email, birthdate, sex, address, occupation, barangay,
               surname, first_name, middle_name, place_of_birth, parent_guardian, cellphone_no,
               is_pregnant, is_senior_citizen, is_pwd, created_at,
+              last_edited_by, last_edited_role, last_edited_at,
               is_nhts_pr, is_4ps, is_indigenous_people, philhealth_no, sss_no, gsis_no,
               allergies, has_hypertension_cva, has_diabetes_mellitus, has_blood_disorders,
               has_cardio_heart_disease, has_thyroid_disorders, hepatitis, malignancy,
@@ -361,13 +376,13 @@ router.delete("/:id", requireRole("admin"), (req, res) => {
   res.json({ success: true });
 });
 
-// Admin: create a new patient record (e.g. a walk-in, or someone the clinic
+// Admin or doctor: create a new patient record (e.g. a walk-in, or someone the clinic
 // wants on file before they ever sign up). This is a *record*, not yet a
 // login-capable account — admin fills in and edits their personal info and
 // logs services applied. If this person later signs up on the website with
 // a matching name + barangay, their signup links to this same record instead
 // of starting a separate, empty one (see routes/auth.js).
-router.post("/", requireRole("admin"), (req, res) => {
+router.post("/", requireRole("admin", "doctor"), (req, res) => {
   const {
     name,
     email,
@@ -424,24 +439,32 @@ router.post("/", requireRole("admin"), (req, res) => {
       parent_guardian || null,
       cellphone_no || null
     );
+  // Remember who added the record (a doctor keeps access to patients they add).
+  db.prepare("UPDATE users SET created_by_id = ? WHERE id = ?").run(req.user.id, info.lastInsertRowid);
+  stampEdit("users", info.lastInsertRowid, req.user);
 
   const patient = db
     .prepare(
-      `SELECT id, name, email, birthdate, sex, address, occupation, barangay, is_pregnant, is_senior_citizen, is_pwd, created_at
+      `SELECT id, name, email, birthdate, sex, address, occupation, barangay, is_pregnant, is_senior_citizen, is_pwd, created_at,
+              last_edited_by, last_edited_role, last_edited_at
        FROM users WHERE id = ?`
     )
     .get(info.lastInsertRowid);
   res.status(201).json(withAge(patient));
 });
 
-// Admin: record/update vitals for a patient (a clinical measurement, separate
-// from the patient's personal info edited via PATCH /:id above)
-router.post("/:id/vitals", requireRole("admin"), (req, res) => {
+// Admin or doctor: record/update vitals for a patient (a clinical measurement,
+// separate from the patient's personal info edited via PATCH /:id above)
+router.post("/:id/vitals", requireRole("admin", "doctor"), (req, res) => {
   const id = Number(req.params.id);
+  if (!canEditPatient(req, id)) {
+    return res.status(403).json({ error: "You can only edit your own patients." });
+  }
   const { pulse_rate, blood_pressure, temperature } = req.body;
   const info = db
     .prepare(`INSERT INTO vitals (patient_id, pulse_rate, blood_pressure, temperature) VALUES (?, ?, ?, ?)`)
     .run(id, pulse_rate || null, blood_pressure || null, temperature || null);
+  stampEdit("users", id, req.user);
   const row = db.prepare("SELECT * FROM vitals WHERE id = ?").get(info.lastInsertRowid);
   res.status(201).json(row);
 });

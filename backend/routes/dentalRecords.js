@@ -3,8 +3,9 @@ import db from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { SERVICES } from "../lib/services.js";
 import { applyServiceRecord, revertServiceRecord } from "../lib/reportSync.js";
-import { getDoctorPatientIds, doctorNamesMatch } from "../lib/doctorMatch.js";
+import { getDoctorAccessiblePatientIds } from "../lib/doctorMatch.js";
 import { archiveServiceRecord } from "../lib/archive.js";
+import { stampEdit } from "../lib/editStamp.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -22,7 +23,7 @@ router.get("/", (req, res) => {
   if (isStaff && !patientId) {
     return res.status(400).json({ error: "patient_id query param required." });
   }
-  if (req.user.role === "doctor" && !getDoctorPatientIds(db, req.user.name).has(patientId)) {
+  if (req.user.role === "doctor" && !getDoctorAccessiblePatientIds(db, req.user).has(patientId)) {
     return res.status(403).json({ error: "You can only view records for your own patients." });
   }
   const rows = db
@@ -31,11 +32,15 @@ router.get("/", (req, res) => {
   res.json(rows);
 });
 
-// Admin adds a dental record for a patient. This also auto-tallies the visit
-// into the e-FHSIS Monthly Report (by the patient's barangay, and by the
-// attending dentist) — see lib/reportSync.js.
-router.post("/", requireRole("admin"), (req, res) => {
+// Admin or doctor adds a dental record for a patient (a doctor: one of their
+// own patients). This also auto-tallies the visit into the e-FHSIS Monthly
+// Report (by the patient's barangay, and by the attending dentist) — see
+// lib/reportSync.js.
+router.post("/", requireRole("admin", "doctor"), (req, res) => {
   const { patient_id, record_date, procedure, dentist, notes } = req.body;
+  if (req.user.role === "doctor" && !getDoctorAccessiblePatientIds(db, req.user).has(Number(patient_id))) {
+    return res.status(403).json({ error: "You can only add records for your own patients." });
+  }
   if (!patient_id || !record_date || !procedure) {
     return res.status(400).json({ error: "patient_id, record_date, and procedure are required." });
   }
@@ -64,18 +69,24 @@ router.post("/", requireRole("admin"), (req, res) => {
       snapshot.report_barangay,
       snapshot.report_dentist
     );
+  stampEdit("dental_records", info.lastInsertRowid, req.user);
+  stampEdit("users", patient_id, req.user);
   const row = db.prepare("SELECT * FROM dental_records WHERE id = ?").get(info.lastInsertRowid);
   res.status(201).json(row);
 });
 
-// Admin edits an existing service/procedure record (spreadsheet-style inline
-// edit). If the visit date or attending dentist changes, the Monthly Report
-// tally is reversed and re-applied so counts stay accurate.
-router.patch("/:id", requireRole("admin"), (req, res) => {
+// Admin or doctor edits an existing service/procedure record (spreadsheet-style
+// inline edit; a doctor: on one of their own patients). If the visit date or
+// attending dentist changes, the Monthly Report tally is reversed and
+// re-applied so counts stay accurate.
+router.patch("/:id", requireRole("admin", "doctor"), (req, res) => {
   const id = Number(req.params.id);
   const { record_date, procedure, dentist, notes } = req.body;
   const existing = db.prepare("SELECT * FROM dental_records WHERE id = ?").get(id);
   if (!existing) return res.status(404).json({ error: "Record not found." });
+  if (req.user.role === "doctor" && !getDoctorAccessiblePatientIds(db, req.user).has(existing.patient_id)) {
+    return res.status(403).json({ error: "You can only edit records of your own patients." });
+  }
 
   if (procedure !== undefined && !SERVICES.includes(procedure)) {
     return res.status(400).json({ error: `procedure must be one of: ${SERVICES.join(", ")}` });
@@ -117,6 +128,8 @@ router.patch("/:id", requireRole("admin"), (req, res) => {
     snapshot.report_dentist,
     id
   );
+  stampEdit("dental_records", id, req.user);
+  stampEdit("users", existing.patient_id, req.user);
 
   const row = db.prepare("SELECT * FROM dental_records WHERE id = ?").get(id);
   res.json(row);
@@ -124,16 +137,11 @@ router.patch("/:id", requireRole("admin"), (req, res) => {
 
 // "Delete" a service record = move it to the Archive (lib/archive.js), which
 // also takes it back out of the Report tallies; restoring tallies it again.
-// A doctor can only remove a record where they themselves are the "dentist"
-// on it -- never a colleague's record, even though they can see every record
-// on a patient they share.
-router.delete("/:id", requireRole("admin", "doctor"), (req, res) => {
+// Admin only — doctors can edit records but not archive/delete them.
+router.delete("/:id", requireRole("admin"), (req, res) => {
   const id = Number(req.params.id);
   const existing = db.prepare("SELECT * FROM dental_records WHERE id = ?").get(id);
   if (!existing) return res.status(404).json({ error: "Record not found." });
-  if (req.user.role === "doctor" && !doctorNamesMatch(existing.dentist, req.user.name)) {
-    return res.status(403).json({ error: "You can only delete your own service records." });
-  }
   archiveServiceRecord(id, req.user);
   res.json({ success: true });
 });

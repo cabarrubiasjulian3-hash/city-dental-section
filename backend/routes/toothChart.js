@@ -1,7 +1,8 @@
 import { Router } from "express";
 import db from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
-import { getDoctorPatientIds } from "../lib/doctorMatch.js";
+import { getDoctorAccessiblePatientIds } from "../lib/doctorMatch.js";
+import { stampEdit } from "../lib/editStamp.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -23,7 +24,7 @@ router.get("/:patientId/tooth-chart", (req, res) => {
   const patientId = Number(req.params.patientId);
   const isAdmin = req.user.role === "admin";
   const isOwnAccount = req.user.id === patientId;
-  const isTheirPatient = req.user.role === "doctor" && getDoctorPatientIds(db, req.user.name).has(patientId);
+  const isTheirPatient = req.user.role === "doctor" && getDoctorAccessiblePatientIds(db, req.user).has(patientId);
   if (!isAdmin && !isOwnAccount && !isTheirPatient) {
     return res.status(403).json({ error: "Not authorized." });
   }
@@ -44,9 +45,12 @@ router.get("/:patientId/tooth-chart", (req, res) => {
   res.json({ chart, dmft });
 });
 
-// Admin: set one tooth's condition (upsert).
-router.patch("/:patientId/tooth-chart/:toothNumber", requireRole("admin"), (req, res) => {
+// Admin or doctor (their own patients): set one tooth's condition (upsert).
+router.patch("/:patientId/tooth-chart/:toothNumber", requireRole("admin", "doctor"), (req, res) => {
   const patientId = Number(req.params.patientId);
+  if (req.user.role === "doctor" && !getDoctorAccessiblePatientIds(db, req.user).has(patientId)) {
+    return res.status(403).json({ error: "You can only edit your own patients." });
+  }
   const { toothNumber } = req.params;
   const { condition, treatment_note } = req.body;
 
@@ -64,6 +68,7 @@ router.patch("/:patientId/tooth-chart/:toothNumber", requireRole("admin"), (req,
      ON CONFLICT(patient_id, tooth_number)
      DO UPDATE SET condition = excluded.condition, treatment_note = excluded.treatment_note, updated_at = datetime('now')`
   ).run(patientId, toothNumber, condition, treatment_note || null);
+  stampEdit("users", patientId, req.user);
 
   res.json({ tooth_number: toothNumber, condition, treatment_note: treatment_note || "" });
 });

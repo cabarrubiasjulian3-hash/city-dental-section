@@ -2,6 +2,7 @@ import { Router } from "express";
 import db from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { archiveScheduleEntry, archivedScheduleKeys } from "../lib/archive.js";
+import { stampEdit } from "../lib/editStamp.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -66,8 +67,8 @@ router.get("/", (req, res) => {
 
 const STATUS_VALUES = ["Upcoming", "Ongoing", "Completed"];
 
-// Admin only: post a new barangay mission date
-router.post("/", requireRole("admin"), (req, res) => {
+// Admin or doctor: post a new barangay mission date
+router.post("/", requireRole("admin", "doctor"), (req, res) => {
   const { barangay_name, visit_date, time_range, services, location, dentist, notes, target, status } = req.body;
   if (!barangay_name || !visit_date) {
     return res.status(400).json({ error: "barangay_name and visit_date are required." });
@@ -90,17 +91,18 @@ router.post("/", requireRole("admin"), (req, res) => {
       safeTarget,
       safeStatus
     );
+  stampEdit("barangay_schedule", info.lastInsertRowid, req.user);
   const row = db.prepare("SELECT * FROM barangay_schedule WHERE id = ?").get(info.lastInsertRowid);
   res.status(201).json(row);
 });
 
-// Admin only: edit a schedule entry — used to fix a mistake on an already
+// Admin or doctor: edit a schedule entry — used to fix a mistake on an already
 // posted date (wrong barangay, dentist, target headcount, status, etc.)
 // without having to delete and re-add it. Only the fields that are sent are
 // changed; barangay_name and visit_date can't be blanked, but the optional
 // text fields (time, activity, dentist, location, notes) can be cleared by
 // sending an empty value.
-router.patch("/:id", requireRole("admin"), (req, res) => {
+router.patch("/:id", requireRole("admin", "doctor"), (req, res) => {
   const existing = db.prepare("SELECT * FROM barangay_schedule WHERE id = ?").get(req.params.id);
   if (!existing) return res.status(404).json({ error: "Schedule entry not found." });
 
@@ -128,6 +130,7 @@ router.patch("/:id", requireRole("admin"), (req, res) => {
     status || existing.status,
     existing.id
   );
+  stampEdit("barangay_schedule", existing.id, req.user);
   res.json(db.prepare("SELECT * FROM barangay_schedule WHERE id = ?").get(existing.id));
 });
 

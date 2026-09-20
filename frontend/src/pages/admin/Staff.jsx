@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Pencil, Archive as ArchiveIcon } from "lucide-react";
 import { api } from "../../lib/api";
 import { Card, EmptyState } from "../../components/ui";
 
@@ -175,13 +176,27 @@ export default function AdminStaff() {
                       )}
                     </td>
                     <td className="py-3 text-forest-700">{s.schedule || "—"}</td>
-                    <td className="py-3 text-right">
-                      <button onClick={() => startEdit(s)} className="text-xs underline text-forest-800 mr-3">
-                        Edit
-                      </button>
-                      <button onClick={() => removeStaff(s)} className="text-xs underline text-red-700">
-                        Remove
-                      </button>
+                    <td className="py-3 text-right whitespace-nowrap">
+                      <div className="inline-flex items-center gap-1">
+                        <button
+                          type="button"
+                          title="Edit staff member"
+                          aria-label={`Edit ${s.name}`}
+                          onClick={() => startEdit(s)}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-full text-forest-800 hover:bg-cream-200"
+                        >
+                          <Pencil size={16} />
+                        </button>
+                        <button
+                          type="button"
+                          title="Archive staff member"
+                          aria-label={`Archive ${s.name}`}
+                          onClick={() => removeStaff(s)}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-full text-red-700 hover:bg-red-50"
+                        >
+                          <ArchiveIcon size={16} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 )

@@ -12,10 +12,13 @@ import { getBotReply, QUICK_REPLIES, WELCOME_MESSAGE } from "../../lib/chatbot";
 // few seconds), each labelled with the doctor's name so the patient knows who
 // they're talking to.
 //
-// The automated bot answers instantly on top of that. Its replies live in
-// lib/chatbot.js and are kept in this browser only (localStorage, per
-// logged-in user); each one is pinned right under the patient message that
-// triggered it (afterId = that message's id on the server).
+// The automated bot answers instantly on top of that. Its replies are worked
+// out in lib/chatbot.js and then SAVED on the server too (POST
+// /messages/bot-reply), so the doctors see the bot's replies in the same
+// conversation. Each one is pinned right under the patient message that
+// triggered it. (Older bot replies that were only ever kept in this browser —
+// localStorage — still show, and a reply that couldn't be saved falls back to
+// the browser copy.)
 
 const REPLY_DELAY_MS = 700; // how long the "typing…" dots show before the bot replies
 const POLL_MS = 5000; // how often to check for new doctor replies
@@ -37,12 +40,18 @@ function staffLabel(m) {
   return name || "Staff";
 }
 
-// Keep everything we already have and add whatever the server sent, so a
-// poll that finishes a moment before a just-sent message can't erase it.
-function mergeById(prev, incoming) {
-  const map = new Map(prev.map((m) => [m.id, m]));
-  for (const m of incoming) map.set(m.id, m);
-  return [...map.values()].sort((a, b) => a.id - b.id);
+// What the server sent is the full conversation. Keep any message we just
+// sent that the server list (fetched a moment earlier) doesn't have yet, so a
+// poll can't erase it.
+function replaceFromServer(prev, incoming) {
+  const seen = new Set(incoming.map((m) => m.id));
+  const newestIncoming = Math.max(0, ...incoming.filter((m) => typeof m.id === "number").map((m) => m.id));
+  const justSent = prev.filter((m) => !seen.has(m.id) && typeof m.id === "number" && m.id > newestIncoming);
+  return [...incoming, ...justSent];
+}
+
+function addIfMissing(prev, message) {
+  return prev.some((m) => m.id === message.id) ? prev : [...prev, message];
 }
 
 export default function PatientMessages() {
@@ -86,7 +95,7 @@ export default function PatientMessages() {
         .get("/messages")
         .then((rows) => {
           if (cancelled) return;
-          setServerMsgs((prev) => mergeById(prev, rows));
+          setServerMsgs((prev) => replaceFromServer(prev, rows));
           setLoadError(false);
           setLoaded(true);
         })
@@ -112,16 +121,35 @@ export default function PatientMessages() {
   // Patient messages + doctor replies (from the server) in order, with each
   // bot reply placed right under the message that triggered it.
   const timeline = useMemo(() => {
+    // Bot replies saved on the server (sender "bot"), by the message they answered.
     const botsByAnchor = new Map();
+    const localBotsByAnchor = new Map();
+    for (const row of serverMsgs) {
+      if (row.sender !== "bot") continue;
+      const list = botsByAnchor.get(row.reply_to) || [];
+      list.push({
+        id: row.id,
+        text: row.body,
+        link: row.link,
+        prefill: row.prefill,
+        at: (parseServerTime(row.sent_at) || new Date()).toISOString(),
+      });
+      botsByAnchor.set(row.reply_to, list);
+    }
+    // Browser-only bot replies (older ones, or ones that couldn't be saved) —
+    // used only where the server has no reply for that message.
     for (const b of botMsgs) {
-      const list = botsByAnchor.get(b.afterId) || [];
+      if (botsByAnchor.has(b.afterId)) continue;
+      const list = localBotsByAnchor.get(b.afterId) || [];
       list.push(b);
-      botsByAnchor.set(b.afterId, list);
+      localBotsByAnchor.set(b.afterId, list);
     }
     const items = [];
     for (const m of serverMsgs) {
+      if (m.sender === "bot") continue;
       items.push({ key: `s-${m.id}`, kind: m.sender === "patient" ? "me" : "staff", m });
       for (const b of botsByAnchor.get(m.id) || []) items.push({ key: b.id, kind: "bot", b });
+      for (const b of localBotsByAnchor.get(m.id) || []) items.push({ key: b.id, kind: "bot", b });
     }
     return items;
   }, [serverMsgs, botMsgs]);
@@ -157,25 +185,34 @@ export default function PatientMessages() {
       setSending(false);
       return;
     }
-    setServerMsgs((prev) => mergeById(prev, [saved]));
+    setServerMsgs((prev) => addIfMissing(prev, saved));
     setText("");
     setSending(false);
     setTyping(true);
 
     timerRef.current = setTimeout(() => {
       const reply = getBotReply(body);
-      setBotMsgs((prev) => [
-        ...prev.slice(-99),
-        {
-          id: `b-${saved.id}`,
-          afterId: saved.id,
-          text: reply.text,
-          link: reply.link,
-          prefill: reply.prefill,
-          at: new Date().toISOString(),
-        },
-      ]);
+      const localBot = {
+        id: `b-${saved.id}`,
+        afterId: saved.id,
+        text: reply.text,
+        link: reply.link,
+        prefill: reply.prefill,
+        at: new Date().toISOString(),
+      };
+      // Show it right away from the browser copy, and save it on the server
+      // so the doctors see it too (the server copy then replaces this one).
+      setBotMsgs((prev) => [...prev.slice(-99), localBot]);
       setTyping(false);
+      api
+        .post("/messages/bot-reply", { reply_to: saved.id, body: reply.text, link: reply.link, prefill: reply.prefill })
+        .then((row) => {
+          setServerMsgs((prev) => addIfMissing(prev, row));
+          setBotMsgs((prev) => prev.filter((b) => b.id !== localBot.id));
+        })
+        .catch(() => {
+          /* stays as the browser-only copy */
+        });
     }, REPLY_DELAY_MS);
   }
 

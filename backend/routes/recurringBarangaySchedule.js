@@ -2,6 +2,7 @@ import { Router } from "express";
 import db from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { archiveRotation } from "../lib/archive.js";
+import { stampEdit } from "../lib/editStamp.js";
 
 const router = Router();
 // Admin AND doctor: the Doctor Portal's Barangay Schedule page is not
@@ -32,6 +33,7 @@ router.post("/", (req, res) => {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(barangay_name, dow, dentist || null, services || null, time_range || null, location || null, safeTarget, notes || null);
+  stampEdit("recurring_barangay_schedule", info.lastInsertRowid, req.user);
   const row = db.prepare(`SELECT * FROM recurring_barangay_schedule WHERE id = ?`).get(info.lastInsertRowid);
   res.status(201).json(row);
 });
@@ -72,13 +74,15 @@ router.patch("/:id", (req, res) => {
     active === undefined ? existing.active : active ? 1 : 0,
     existing.id
   );
+  stampEdit("recurring_barangay_schedule", existing.id, req.user);
   res.json(db.prepare(`SELECT * FROM recurring_barangay_schedule WHERE id = ?`).get(existing.id));
 });
 
 // DELETE /api/recurring-schedule/:id — moves the rotation rule to the Archive.
 // removeFuture=true also archives any not-yet-happened schedule rows this
 // rule generated, so turning off a rotation doesn't leave upcoming dates behind.
-router.delete("/:id", (req, res) => {
+// Admin only — doctors can pause/resume and edit a rotation, not archive it.
+router.delete("/:id", requireRole("admin"), (req, res) => {
   const ok = archiveRotation(Number(req.params.id), req.query.removeFuture === "true", req.user);
   if (!ok) return res.status(404).json({ error: "Rotation rule not found." });
   res.json({ ok: true });

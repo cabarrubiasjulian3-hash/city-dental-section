@@ -28,7 +28,10 @@ function toIso(sqliteTimestamp) {
 //    per patient (with a count if they sent several), for ALL doctors, since
 //    every doctor shares the chat inbox. As soon as ANY doctor replies to that
 //    patient, the item disappears for everyone, so two doctors don't answer
-//    the same message. Links into /doctor/messages.
+//    the same message. Links into /doctor/messages. Also lists WHICH DOCTOR
+//    changed patient records / the barangay schedule ("Dr. Ana Lopez updated
+//    a patient record"); your own changes show as "You …" and don't count
+//    toward the unread badge (mine: true).
 //  - ADMIN: new patients, new staff, and what DOCTORS changed on patient
 //    records ("Dr. Ana Lopez updated a patient record"). Messages aren't an
 //    admin thing anymore (the Messages page lives in the Doctor Portal).
@@ -43,7 +46,50 @@ const DOCTOR_ACTION_TEXT = {
   logged_vitals: "logged vital signs",
   updated_oral_chart: "updated an oral health chart",
   imported_patients: "imported patient records",
+  created_schedule: "added a barangay schedule entry",
+  updated_schedule: "updated a barangay schedule entry",
+  archived_schedule: "archived a barangay schedule entry",
+  created_rotation: "set up a weekly rotation",
+  updated_rotation: "updated a weekly rotation",
+  paused_rotation: "paused a weekly rotation",
+  resumed_rotation: "resumed a weekly rotation",
+  archived_rotation: "archived a weekly rotation",
 };
+
+const SCHEDULE_ACTIONS = new Set([
+  "created_schedule", "updated_schedule", "archived_schedule",
+  "created_rotation", "updated_rotation", "paused_rotation", "resumed_rotation", "archived_rotation",
+]);
+
+// The "what did the doctors change" items, shared by the admin and doctor
+// bells. `portal` is "admin" or "doctor" (for the links); `viewerId` marks the
+// viewing doctor's own changes ("You …").
+function doctorChangeItems(portal, viewerId) {
+  return groupDoctorActivity(
+    db.prepare(`SELECT * FROM activity_log WHERE actor_role = 'doctor' ORDER BY created_at DESC, id DESC LIMIT 200`).all()
+  )
+    .slice(0, 15)
+    .map((g) => {
+      const mine = viewerId != null && g.actor_id === viewerId;
+      const isSchedule = SCHEDULE_ACTIONS.has(g.action);
+      const what = DOCTOR_ACTION_TEXT[g.action] || "changed a record";
+      const subject = isSchedule ? g.detail || "" : g.patient_name || "a patient";
+      const extra = isSchedule ? "" : g.count > 1 ? ` — ${g.count} changes` : g.detail ? ` — ${g.detail}` : "";
+      return {
+        id: `activity-${g.id}`,
+        type: "record_change",
+        title: `${mine ? "You" : doctorLabel(g.actor_name)} ${what}`,
+        detail: subject + extra,
+        at: toIso(g.created_at),
+        mine,
+        link: isSchedule
+          ? `/${portal}/barangay-schedule`
+          : g.patient_name
+          ? `/${portal}/patients?search=${encodeURIComponent(g.patient_name)}`
+          : `/${portal}/patients`,
+      };
+    });
+}
 
 function doctorLabel(name) {
   const clean = String(name || "").trim().replace(/^(dr\.?|doctor)\s+/i, "");
@@ -91,18 +137,22 @@ router.get("/", (req, res) => {
       .all();
 
     const lastMessage = db.prepare(`SELECT body, sent_at FROM messages WHERE id = ?`);
+    const messageItems = waiting.map((w) => {
+      const last = lastMessage.get(w.last_id);
+      return {
+        id: `message-${w.last_id}`,
+        type: "message",
+        title: w.unanswered > 1 ? `${w.unanswered} new messages from ${w.name}` : `New message from ${w.name}`,
+        detail: last.body,
+        at: toIso(last.sent_at),
+        link: `/doctor/messages?patient_id=${w.patient_id}`,
+      };
+    });
     return res.json(
-      waiting.map((w) => {
-        const last = lastMessage.get(w.last_id);
-        return {
-          id: `message-${w.last_id}`,
-          type: "message",
-          title: w.unanswered > 1 ? `${w.unanswered} new messages from ${w.name}` : `New message from ${w.name}`,
-          detail: last.body,
-          at: toIso(last.sent_at),
-          link: `/doctor/messages?patient_id=${w.patient_id}`,
-        };
-      })
+      [...messageItems, ...doctorChangeItems("doctor", req.user.id)]
+        .filter((n) => n.at)
+        .sort((a, b) => new Date(b.at) - new Date(a.at))
+        .slice(0, 30)
     );
   }
 
@@ -130,20 +180,7 @@ router.get("/", (req, res) => {
       link: `/admin/staff`,
     }));
 
-  const doctorChanges = groupDoctorActivity(
-    db.prepare(`SELECT * FROM activity_log WHERE actor_role = 'doctor' ORDER BY created_at DESC, id DESC LIMIT 200`).all()
-  )
-    .slice(0, 15)
-    .map((g) => ({
-      id: `activity-${g.id}`,
-      type: "record_change",
-      title: `${doctorLabel(g.actor_name)} ${DOCTOR_ACTION_TEXT[g.action] || "changed a record"}`,
-      detail:
-        (g.patient_name || "a patient") +
-        (g.count > 1 ? ` — ${g.count} changes` : g.detail ? ` — ${g.detail}` : ""),
-      at: toIso(g.created_at),
-      link: g.patient_name ? `/admin/patients?search=${encodeURIComponent(g.patient_name)}` : `/admin/patients`,
-    }));
+  const doctorChanges = doctorChangeItems("admin", null);
 
   const combined = [...patients, ...staff, ...doctorChanges]
     .filter((n) => n.at)

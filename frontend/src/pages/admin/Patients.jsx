@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Pencil, Archive as ArchiveIcon } from "lucide-react";
+import { Pencil, Archive as ArchiveIcon, Check, X as XIcon } from "lucide-react";
 import { api } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
 import { Card, EmptyState } from "../../components/ui";
@@ -8,6 +8,7 @@ import Modal from "../../components/Modal";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import ToothChart from "../../components/ToothChart";
 import EditableCell, { SEX_OPTIONS } from "../../components/EditableCell";
+import EditedBy from "../../components/EditedBy";
 import { SERVICE_OPTIONS, visitsRequiredFor, computeRecordStatuses } from "../../lib/services";
 import { REPORT_FIELD_LABELS } from "../../lib/reportFieldLabels";
 import { TAYABAS_BARANGAYS } from "../../lib/barangays";
@@ -228,21 +229,10 @@ const INITIAL_RECORD_FIELDS = ["initial_record_date", "initial_procedure", "init
 
 export default function AdminPatients({ readOnly = false }) {
   const { user } = useAuth();
-  // A doctor can delete a service record only if they're the "dentist" on
-  // it -- same name-matching rule the backend enforces in dentalRecords.js.
-  // For anyone else (admin) this is just always true.
-  function canDeleteRecord(record) {
-    if (user?.role !== "doctor") return true;
-    return normalizeForMatch(record.dentist) === normalizeForMatch(user.name);
-  }
-  function normalizeForMatch(str) {
-    return String(str || "")
-      .toLowerCase()
-      .replace(/^(dr\.?|doctor)\s+/i, "")
-      .replace(/[.,]/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
-  }
+  // Admins can edit AND archive. Doctors can edit patient and service records
+  // (the backend limits them to their own patients) but never archive/delete.
+  const isAdmin = user?.role === "admin";
+  const canEdit = user?.role === "admin" || user?.role === "doctor";
   const [patients, setPatients] = useState([]);
   const [selected, setSelected] = useState(null);
   const [showDetails, setShowDetails] = useState(true);
@@ -259,6 +249,12 @@ export default function AdminPatients({ readOnly = false }) {
   const [showTreatmentModal, setShowTreatmentModal] = useState(false);
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [records, setRecords] = useState([]);
+  // Which Service History row is currently in edit mode (its pencil icon was
+  // clicked), the draft values being typed, and any save error to show.
+  const [editingRecordId, setEditingRecordId] = useState(null);
+  const [recordDraft, setRecordDraft] = useState({ record_date: "", procedure: "", dentist: "", notes: "" });
+  const [savingRecordEdit, setSavingRecordEdit] = useState(false);
+  const [recordEditError, setRecordEditError] = useState("");
   const [dentists, setDentists] = useState([]);
   const [newRecord, setNewRecord] = useState({ record_date: "", procedure: "", dentist: "", notes: "" });
   const [addingRecord, setAddingRecord] = useState(false);
@@ -398,6 +394,8 @@ export default function AdminPatients({ readOnly = false }) {
     setShowTreatmentModal(false);
     setShowSummaryModal(false);
     setShowAddRecordModal(false);
+    setEditingRecordId(null);
+    setRecordEditError("");
     try {
       const full = await api.get(`/patients/${p.id}`);
       setSelected(full);
@@ -715,6 +713,7 @@ export default function AdminPatients({ readOnly = false }) {
             : p
         )
       );
+      loadPatients(); // refresh the "Edited by" line in the patient list
       // Back to Service History, where the new visit is now listed.
       setShowAddRecordModal(false);
       setShowHistoryModal(true);
@@ -728,6 +727,56 @@ export default function AdminPatients({ readOnly = false }) {
   async function saveRecordField(record, field, value) {
     const updated = await api.patch(`/dental-records/${record.id}`, { [field]: value });
     setRecords((list) => list.map((r) => (r.id === record.id ? updated : r)));
+    loadPatients(); // refresh the "Edited by" line in the patient list
+  }
+
+  // Pencil icon on a Service History row: turns the whole row (date,
+  // procedure, dentist, notes) into inputs. Only admins can save edits — the
+  // API enforces this too.
+  function startEditRecord(record) {
+    setRecordEditError("");
+    setRecordDraft({
+      record_date: (record.record_date || "").slice(0, 10),
+      procedure: record.procedure || "",
+      dentist: record.dentist || "",
+      notes: record.notes || "",
+    });
+    setEditingRecordId(record.id);
+  }
+
+  function cancelEditRecord() {
+    setEditingRecordId(null);
+    setRecordEditError("");
+  }
+
+  async function saveEditedRecord(record) {
+    if (!recordDraft.record_date || !recordDraft.procedure) {
+      setRecordEditError("Date and procedure are required.");
+      return;
+    }
+    // Only send what actually changed.
+    const body = {};
+    if (recordDraft.record_date !== (record.record_date || "").slice(0, 10)) body.record_date = recordDraft.record_date;
+    if (recordDraft.procedure !== (record.procedure || "")) body.procedure = recordDraft.procedure;
+    if (recordDraft.dentist !== (record.dentist || "")) body.dentist = recordDraft.dentist;
+    if (recordDraft.notes !== (record.notes || "")) body.notes = recordDraft.notes;
+    if (!Object.keys(body).length) {
+      cancelEditRecord();
+      return;
+    }
+    setSavingRecordEdit(true);
+    setRecordEditError("");
+    try {
+      const updated = await api.patch(`/dental-records/${record.id}`, body);
+      setRecords((list) => list.map((r) => (r.id === record.id ? updated : r)));
+      // The patient list's "latest procedure" / status pill can change too.
+      loadPatients();
+      setEditingRecordId(null);
+    } catch (err) {
+      setRecordEditError(err.message || "Could not save the changes.");
+    } finally {
+      setSavingRecordEdit(false);
+    }
   }
 
   // Moves one service record to the Archive (restorable from the Archive page).
@@ -862,8 +911,8 @@ export default function AdminPatients({ readOnly = false }) {
       {/* ---------- STEP 1: header ---------- */}
       {readOnly && (
         <div className="bg-clay-500/10 border border-clay-500 text-forest-900 text-sm rounded-lg px-3 py-2">
-          Preview only — doctor accounts can view patient records and add a new patient, but cannot edit or delete
-          existing records.
+          Doctor accounts can view and edit their own patients' records and add a new patient, but cannot archive or
+          delete records.
         </div>
       )}
       <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -1068,36 +1117,9 @@ export default function AdminPatients({ readOnly = false }) {
 
             {checkingNewPatient && <p className="text-xs text-forest-700">Checking existing patient records...</p>}
 
-            {newPatientMatches.length > 0 && (
-              <div className="duplicate-alert">
-                <strong>May existing record na ang patient na ito.</strong>
-                <p className="mt-1">
-                  {newPatientMatches[0].name}
-                  {newPatientMatches[0].barangay ? ` — ${newPatientMatches[0].barangay}` : ""}
-                </p>
-                <div className="mt-2 flex gap-3 text-xs">
-                  <button
-                    type="button"
-                    className="underline"
-                    onClick={() => {
-                      openPatient(newPatientMatches[0]);
-                      setShowNewPatientForm(false);
-                    }}
-                  >
-                    Buksan ang existing record
-                  </button>
-                  <button
-                    type="button"
-                    className="underline"
-                    onClick={() => {
-                      setConfirmedDuplicate(true);
-                    }}
-                  >
-                    Continue new record
-                  </button>
-                </div>
-              </div>
-            )}
+            {/* The "may existing record na" warning is a pop-up now (see the
+                duplicatePopup dialog at the bottom of this page), not a banner
+                down here in the form. */}
 
             {/* Membership */}
             <div className="border-t border-cream-200 pt-3">
@@ -1500,6 +1522,7 @@ export default function AdminPatients({ readOnly = false }) {
                       <td className="px-2 py-2">
                         <p className="font-semibold text-forest-950">{p.name}</p>
                         <p className="text-xs text-forest-500">TC-{String(p.id).padStart(4, "0")}</p>
+                        <EditedBy row={p} className="print:hidden" />
                       </td>
                       <td className="px-2 py-2 text-forest-700">{p.barangay || "—"}</td>
                       <td className="px-2 py-2 text-forest-700">{p.age ?? "—"}</td>
@@ -1516,7 +1539,7 @@ export default function AdminPatients({ readOnly = false }) {
                         </span>
                       </td>
                       <td className="px-2 py-2 text-right whitespace-nowrap print:hidden">
-                        {!readOnly && (
+                        {canEdit && (
                           <div className="inline-flex items-center gap-1">
                             <button
                               type="button"
@@ -1530,18 +1553,20 @@ export default function AdminPatients({ readOnly = false }) {
                             >
                               <Pencil size={16} />
                             </button>
-                            <button
-                              type="button"
-                              title="Archive patient record"
-                              aria-label={`Archive ${p.name}`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                deleteRow(p);
-                              }}
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-red-700 hover:bg-red-50"
-                            >
-                              <ArchiveIcon size={16} />
-                            </button>
+                            {isAdmin && !readOnly && (
+                              <button
+                                type="button"
+                                title="Archive patient record"
+                                aria-label={`Archive ${p.name}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  deleteRow(p);
+                                }}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-red-700 hover:bg-red-50"
+                              >
+                                <ArchiveIcon size={16} />
+                              </button>
+                            )}
                           </div>
                         )}
                       </td>
@@ -1563,7 +1588,15 @@ export default function AdminPatients({ readOnly = false }) {
           before opening its own separate popup (Individual Patient
           Treatment Record, or Patient Summary) — same <Modal> component as
           Log in / Sign up, so clicking outside the open popup closes it. ---------- */}
-      <Modal isOpen={showHistoryModal && !!selected} onClose={() => setShowHistoryModal(false)} size="xl">
+      <Modal
+        isOpen={showHistoryModal && !!selected}
+        onClose={() => {
+          setShowHistoryModal(false);
+          setEditingRecordId(null);
+          setRecordEditError("");
+        }}
+        size="xl"
+      >
         {selected && (
           <div className="space-y-4">
             <div>
@@ -1575,7 +1608,7 @@ export default function AdminPatients({ readOnly = false }) {
 
             {records.length ? (
               <div className="max-h-[320px] overflow-y-auto overflow-x-auto">
-                <table className="w-full text-sm min-w-[560px]">
+                <table className="w-full text-sm min-w-[680px]">
                   <thead>
                     <tr className="text-left text-forest-700 uppercase text-xs">
                       <th className="py-2 pr-2">Date</th>
@@ -1583,63 +1616,161 @@ export default function AdminPatients({ readOnly = false }) {
                       <th className="py-2 pr-2">Status</th>
                       <th className="py-2 pr-2">Dentist</th>
                       <th className="py-2 pr-2">Notes</th>
+                      <th className="py-2 pr-2">Last edited by</th>
                       <th className="py-2 pr-2 print:hidden"></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {records.map((r) => (
-                      <tr key={r.id} className="border-t border-cream-200 align-top">
-                        <td className="py-2 pr-2 whitespace-nowrap text-forest-950">
-                          {r.record_date ? new Date(r.record_date).toLocaleDateString() : "—"}
-                        </td>
-                        <td className="py-2 pr-2 text-forest-950">{r.procedure || "—"}</td>
-                        <td className="py-2 pr-2">
-                          <span
-                            className={`inline-block text-xs font-semibold rounded-full px-3 py-1 whitespace-nowrap ${
-                              STATUS_STYLES[recordStatuses.get(r.id)] || ""
-                            }`}
-                          >
-                            {recordStatuses.get(r.id) || "—"}
-                          </span>
-                        </td>
-                        <td className="py-2 pr-2 min-w-[140px]">
-                          <EditableCell
-                            type="select"
-                            options={dentistOptions(r.dentist)}
-                            value={r.dentist}
-                            placeholder="Unassigned"
-                            onSave={(v) => saveRecordField(r, "dentist", v)}
-                          />
-                        </td>
-                        <td className="py-2 pr-2 min-w-[160px]">
-                          <EditableCell
-                            value={r.notes}
-                            placeholder="Notes"
-                            onSave={(v) => saveRecordField(r, "notes", v)}
-                            className="italic"
-                          />
-                        </td>
-                        <td className="py-2 pr-2 text-right whitespace-nowrap print:hidden">
-                          {canDeleteRecord(r) && (
-                            <button
-                              type="button"
-                              title="Archive service record"
-                              aria-label="Archive service record"
-                              onClick={() => deleteRecord(r)}
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-red-700 hover:bg-red-50"
+                    {records.map((r) =>
+                      editingRecordId === r.id ? (
+                        <tr key={r.id} className="border-t border-cream-200 align-top bg-cream-100">
+                          <td className="py-2 pr-2">
+                            <input
+                              type="date"
+                              value={recordDraft.record_date}
+                              onChange={(e) => setRecordDraft((d) => ({ ...d, record_date: e.target.value }))}
+                              className="w-full min-w-[130px] px-2 py-1.5 rounded border border-forest-500 bg-cream-50 text-sm"
+                            />
+                          </td>
+                          <td className="py-2 pr-2">
+                            <select
+                              value={recordDraft.procedure}
+                              onChange={(e) => setRecordDraft((d) => ({ ...d, procedure: e.target.value }))}
+                              className="w-full min-w-[150px] px-2 py-1.5 rounded border border-forest-500 bg-cream-50 text-sm"
                             >
-                              <ArchiveIcon size={16} />
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
+                              {SERVICE_OPTIONS.filter((o) => o.value).map((o) => (
+                                <option key={o.value} value={o.value}>
+                                  {o.label}
+                                </option>
+                              ))}
+                              {recordDraft.procedure && !SERVICE_OPTIONS.some((o) => o.value === recordDraft.procedure) && (
+                                <option value={recordDraft.procedure}>{recordDraft.procedure}</option>
+                              )}
+                            </select>
+                          </td>
+                          <td className="py-2 pr-2 text-forest-500">
+                            <span className="inline-block px-3 py-1 text-xs">—</span>
+                          </td>
+                          <td className="py-2 pr-2 min-w-[140px]">
+                            <select
+                              value={recordDraft.dentist}
+                              onChange={(e) => setRecordDraft((d) => ({ ...d, dentist: e.target.value }))}
+                              className="w-full px-2 py-1.5 rounded border border-forest-500 bg-cream-50 text-sm"
+                            >
+                              {dentistOptions(r.dentist).map((o) => (
+                                <option key={o.value} value={o.value}>
+                                  {o.label}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                          <td className="py-2 pr-2 min-w-[160px]">
+                            <input
+                              value={recordDraft.notes}
+                              placeholder="Notes"
+                              onChange={(e) => setRecordDraft((d) => ({ ...d, notes: e.target.value }))}
+                              className="w-full px-2 py-1.5 rounded border border-forest-500 bg-cream-50 text-sm italic"
+                            />
+                          </td>
+                          <td className="py-2 pr-2">
+                            <EditedBy row={r} stacked />
+                          </td>
+                          <td className="py-2 text-right whitespace-nowrap print:hidden">
+                            <div className="inline-flex items-center gap-1">
+                              <button
+                                type="button"
+                                title="Save changes"
+                                aria-label="Save changes"
+                                disabled={savingRecordEdit}
+                                onClick={() => saveEditedRecord(r)}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-forest-800 hover:bg-cream-200 disabled:opacity-50"
+                              >
+                                <Check size={16} />
+                              </button>
+                              <button
+                                type="button"
+                                title="Cancel"
+                                aria-label="Cancel editing"
+                                disabled={savingRecordEdit}
+                                onClick={cancelEditRecord}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-forest-600 hover:bg-cream-200 disabled:opacity-50"
+                              >
+                                <XIcon size={16} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ) : (
+                        <tr key={r.id} className="border-t border-cream-200 align-top">
+                          <td className="py-2 pr-2 whitespace-nowrap text-forest-950">
+                            {r.record_date ? new Date(r.record_date).toLocaleDateString() : "—"}
+                          </td>
+                          <td className="py-2 pr-2 text-forest-950">{r.procedure || "—"}</td>
+                          <td className="py-2 pr-2">
+                            <span
+                              className={`inline-block text-xs font-semibold rounded-full px-3 py-1 whitespace-nowrap ${
+                                STATUS_STYLES[recordStatuses.get(r.id)] || ""
+                              }`}
+                            >
+                              {recordStatuses.get(r.id) || "—"}
+                            </span>
+                          </td>
+                          <td className="py-2 pr-2 min-w-[140px]">
+                            <EditableCell
+                              type="select"
+                              options={dentistOptions(r.dentist)}
+                              value={r.dentist}
+                              placeholder="Unassigned"
+                              onSave={(v) => saveRecordField(r, "dentist", v)}
+                            />
+                          </td>
+                          <td className="py-2 pr-2 min-w-[160px]">
+                            <EditableCell
+                              value={r.notes}
+                              placeholder="Notes"
+                              onSave={(v) => saveRecordField(r, "notes", v)}
+                              className="italic"
+                            />
+                          </td>
+                          <td className="py-2 pr-2">
+                            <EditedBy row={r} stacked />
+                          </td>
+                          <td className="py-2 text-right whitespace-nowrap print:hidden">
+                            <div className="inline-flex items-center gap-1">
+                              {canEdit && (
+                                <button
+                                  type="button"
+                                  title="Edit service record"
+                                  aria-label="Edit service record"
+                                  onClick={() => startEditRecord(r)}
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-full text-forest-800 hover:bg-cream-200"
+                                >
+                                  <Pencil size={16} />
+                                </button>
+                              )}
+                              {isAdmin && (
+                                <button
+                                  type="button"
+                                  title="Archive service record"
+                                  aria-label="Archive service record"
+                                  onClick={() => deleteRecord(r)}
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-full text-red-700 hover:bg-red-50"
+                                >
+                                  <ArchiveIcon size={16} />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    )}
                   </tbody>
                 </table>
               </div>
             ) : (
               <EmptyState>No service history yet for this patient.</EmptyState>
             )}
+            {recordEditError && <p className="text-sm text-red-700">{recordEditError}</p>}
 
             <div className="grid gap-3 pt-2 border-t border-cream-200 sm:grid-cols-3">
               <button
@@ -2247,7 +2378,7 @@ export default function AdminPatients({ readOnly = false }) {
                       <button
                         type="button"
                         onClick={() => openExistingFromPopup(m)}
-                        className="ml-2 text-xs font-semibold underline"
+                        className="ml-2 rounded-full bg-forest-900 px-3 py-1 text-xs font-semibold text-cream-50 hover:bg-forest-800"
                       >
                         Buksan
                       </button>

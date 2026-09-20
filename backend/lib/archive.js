@@ -13,6 +13,10 @@ function conflict(message) {
   return Object.assign(new Error(message), { status: 409 });
 }
 
+function tableExists(name) {
+  return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
+}
+
 const columnCache = {};
 function columnsOf(table) {
   if (!columnCache[table]) {
@@ -56,6 +60,7 @@ export const archivePatient = db.transaction((id, user) => {
     vitals: db.prepare("SELECT * FROM vitals WHERE patient_id = ?").all(id),
     dental_records: records,
     messages: db.prepare("SELECT * FROM messages WHERE patient_id = ?").all(id),
+    bot_replies: tableExists("bot_replies") ? db.prepare("SELECT * FROM bot_replies WHERE patient_id = ?").all(id) : [],
     tooth_conditions: db.prepare("SELECT * FROM tooth_conditions WHERE patient_id = ?").all(id),
   };
 
@@ -83,10 +88,55 @@ function restorePatient(data) {
   insertRow("users", u);
   for (const v of data.vitals || []) insertRow("vitals", v);
   for (const m of data.messages || []) insertRow("messages", m);
+  if (tableExists("bot_replies")) for (const b of data.bot_replies || []) insertRow("bot_replies", b);
   for (const t of data.tooth_conditions || []) insertRow("tooth_conditions", t);
   for (const r of data.dental_records || []) {
     const snapshot = applyServiceRecord({ patient: u, recordDate: r.record_date, dentist: r.dentist });
     insertRow("dental_records", { ...r, ...snapshot });
+  }
+}
+
+// ---------------------------------------------------------- doctor accounts
+
+// A doctor account (User Management) goes to the archive as a snapshot of the
+// user row. Access codes point at users without a cascade, so the codes that
+// reference this doctor are let go first (and remembered, so a restore can
+// point them back at the doctor).
+export const archiveDoctorAccount = db.transaction((id, user) => {
+  const doctor = db.prepare("SELECT * FROM users WHERE id = ? AND role = 'doctor'").get(id);
+  if (!doctor) return false;
+
+  const usedCodes = db.prepare("SELECT id FROM access_codes WHERE used_by = ?").all(id).map((c) => c.id);
+  const createdCodes = db.prepare("SELECT id FROM access_codes WHERE created_by = ?").all(id).map((c) => c.id);
+  db.prepare("UPDATE access_codes SET used_by = NULL WHERE used_by = ?").run(id);
+  db.prepare("UPDATE access_codes SET created_by = NULL WHERE created_by = ?").run(id);
+
+  addToArchive({
+    type: "doctor",
+    entityId: id,
+    label: doctor.name,
+    detail: [doctor.email, doctor.doctor_status].filter(Boolean).join(" · "),
+    data: { user: doctor, used_codes: usedCodes, created_codes: createdCodes },
+    user,
+  });
+  db.prepare("DELETE FROM users WHERE id = ?").run(id);
+  return true;
+});
+
+function restoreDoctorAccount(data) {
+  const u = data.user;
+  if (db.prepare("SELECT 1 FROM users WHERE id = ?").get(u.id)) {
+    throw conflict("Can't restore — that account's ID is already in use.");
+  }
+  if (db.prepare("SELECT 1 FROM users WHERE email = ?").get(u.email)) {
+    throw conflict(`Can't restore — another account already uses the email ${u.email}.`);
+  }
+  insertRow("users", u);
+  for (const codeId of data.used_codes || []) {
+    db.prepare("UPDATE access_codes SET used_by = ? WHERE id = ? AND used_by IS NULL").run(u.id, codeId);
+  }
+  for (const codeId of data.created_codes || []) {
+    db.prepare("UPDATE access_codes SET created_by = ? WHERE id = ? AND created_by IS NULL").run(u.id, codeId);
   }
 }
 
@@ -242,6 +292,7 @@ function restoreAccessCode(data) {
 
 const RESTORERS = {
   patient: restorePatient,
+  doctor: restoreDoctorAccount,
   service_record: restoreServiceRecord,
   barangay_schedule: restoreScheduleEntry,
   rotation: restoreRotation,

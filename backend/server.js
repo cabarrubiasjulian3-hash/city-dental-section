@@ -15,10 +15,14 @@ import toothChartRoutes from "./routes/toothChart.js";
 import notificationRoutes from "./routes/notifications.js";
 import doctorAccessRoutes from "./routes/doctorAccess.js";
 import archiveRoutes from "./routes/archive.js";
+import userRoutes from "./routes/users.js";
+import { auditDoctorChanges } from "./middleware/auditLog.js";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+// Logs what doctors change (patient records, barangay schedule) for the notification bell.
+app.use("/api", auditDoctorChanges);
 
 app.get("/api/health", (req, res) => res.json({ ok: true, service: "city-dental-section-api" }));
 
@@ -35,6 +39,7 @@ app.use("/api/patients", toothChartRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/doctor-access", doctorAccessRoutes);
 app.use("/api/archive", archiveRoutes);
+app.use("/api/users", userRoutes);
 
 app.use((req, res) => res.status(404).json({ error: "Not found." }));
 // eslint-disable-next-line no-unused-vars

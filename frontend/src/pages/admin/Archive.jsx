@@ -10,6 +10,7 @@ import ConfirmDialog from "../../components/ConfirmDialog";
 const TABS = [
   { key: "all", label: "All" },
   { key: "patient", label: "Patients" },
+  { key: "doctor", label: "Doctors" },
   { key: "service_record", label: "Service records" },
   { key: "barangay_schedule", label: "Barangay schedule" },
   { key: "rotation", label: "Weekly rotations" },
@@ -19,6 +20,7 @@ const TABS = [
 
 const TYPE_LABEL = {
   patient: "Patient",
+  doctor: "Doctor",
   service_record: "Service record",
   barangay_schedule: "Barangay schedule",
   rotation: "Weekly rotation",

@@ -24,7 +24,7 @@ const NOTIFICATION_ICONS = {
   patient: Users,
   message: MessageSquare,
   staff: UserPlus,
-  record_change: ClipboardEdit, // a doctor changed a patient record (admin only)
+  record_change: ClipboardEdit, // a doctor changed a patient record / the barangay schedule
 };
 
 export default function PortalLayout({ title, subtitle, navItems }) {
@@ -83,7 +83,8 @@ export default function PortalLayout({ title, subtitle, navItems }) {
   // depends on who's logged in:
   //  - Admin: new patients and new staff/dentists.
   //  - Doctor: patient chat messages nobody has answered yet — they disappear
-  //    for every doctor as soon as any doctor replies.
+  //    for every doctor as soon as any doctor replies — plus which doctor
+  //    changed patient records or the barangay schedule.
   // Patients don't get a bell. "Unread" is tracked client-side: anything
   // newer than the last time the dropdown was opened counts toward the badge.
   const hasNotifications = user?.role === "admin" || user?.role === "doctor";
@@ -102,7 +103,11 @@ export default function PortalLayout({ title, subtitle, navItems }) {
     return () => clearInterval(interval);
   }, [hasNotifications, user?.role]);
 
-  const unreadCount = notifications.filter((n) => !lastSeenAt || new Date(n.at) > new Date(lastSeenAt)).length;
+  // Your own changes (mine: true — a doctor's own edits in the doctor bell)
+  // are listed but don't count toward the unread badge.
+  const unreadCount = notifications.filter(
+    (n) => !n.mine && (!lastSeenAt || new Date(n.at) > new Date(lastSeenAt))
+  ).length;
 
   function toggleNotifications() {
     setNotifOpen((open) => {
