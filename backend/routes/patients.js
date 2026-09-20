@@ -5,6 +5,7 @@ import { requireAuth, requireRole } from "../middleware/auth.js";
 import { calcAge } from "../lib/age.js";
 import { importWorkbookBuffer } from "../lib/importExcel.js";
 import { getDoctorPatientIds } from "../lib/doctorMatch.js";
+import { archivePatient } from "../lib/archive.js";
 import ExcelJS from "exceljs";
 import bcrypt from "bcryptjs";
 
@@ -351,12 +352,12 @@ router.get("/:id", (req, res) => {
   res.json({ ...withAge(patient), vitals: vitals || null });
 });
 
-// Admin: delete a patient (and their dependent records, via FK cascade).
+// Admin: "delete" a patient. They (and their service records, vitals,
+// messages and tooth chart) are moved to the Archive — see lib/archive.js —
+// and can be restored from the Archive page.
 router.delete("/:id", requireRole("admin"), (req, res) => {
-  const id = Number(req.params.id);
-  const existing = db.prepare("SELECT id FROM users WHERE id = ? AND role = 'patient'").get(id);
-  if (!existing) return res.status(404).json({ error: "Patient not found." });
-  db.prepare("DELETE FROM users WHERE id = ?").run(id);
+  const ok = archivePatient(Number(req.params.id), req.user);
+  if (!ok) return res.status(404).json({ error: "Patient not found." });
   res.json({ success: true });
 });
 

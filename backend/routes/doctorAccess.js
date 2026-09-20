@@ -2,6 +2,7 @@ import { Router } from "express";
 import crypto from "crypto";
 import db from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
+import { archiveAccessCode } from "../lib/archive.js";
 
 const router = Router();
 
@@ -54,19 +55,17 @@ router.post("/codes", (req, res) => {
   res.status(201).json(row);
 });
 
-// DELETE /doctor-access/codes/:id — remove a code. Allowed for "unused" codes
-// (the accidental-click case) and "revoked" ones (leftover rows from before
-// this endpoint did a hard delete — there's nothing to preserve about those
-// either). A "used" code stays, since it's tied to a real doctor account and
-// deleting it would orphan that link.
+// DELETE /doctor-access/codes/:id — "delete" a code = move it to the Archive.
+// Allowed for "unused" and "revoked" codes. A "used" code stays, since it's
+// tied to a real doctor account.
 router.delete("/codes/:id", (req, res) => {
   const row = db.prepare("SELECT * FROM access_codes WHERE id = ?").get(req.params.id);
   if (!row) return res.status(404).json({ error: "Access code not found." });
   if (row.status === "used") {
     return res.status(400).json({ error: "A used code can't be deleted — it's tied to a doctor account." });
   }
-  db.prepare("DELETE FROM access_codes WHERE id = ?").run(row.id);
-  res.json({ message: "Access code deleted." });
+  archiveAccessCode(row.id, req.user);
+  res.json({ message: "Access code moved to the Archive." });
 });
 
 // GET /doctor-access/doctors — every doctor account (pending, approved, or

@@ -14,6 +14,7 @@ import monthlyReportRoutes from "./routes/monthlyReports.js";
 import toothChartRoutes from "./routes/toothChart.js";
 import notificationRoutes from "./routes/notifications.js";
 import doctorAccessRoutes from "./routes/doctorAccess.js";
+import archiveRoutes from "./routes/archive.js";
 
 const app = express();
 app.use(cors());
@@ -33,6 +34,7 @@ app.use("/api/monthly-reports", monthlyReportRoutes);
 app.use("/api/patients", toothChartRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/doctor-access", doctorAccessRoutes);
+app.use("/api/archive", archiveRoutes);
 
 app.use((req, res) => res.status(404).json({ error: "Not found." }));
 // eslint-disable-next-line no-unused-vars

@@ -559,8 +559,16 @@ export default function AdminPatients({ readOnly = false }) {
     }
   }
 
+  // "Delete" doesn't destroy anything — the patient (with their service
+  // records) is moved to the Archive, and an admin can restore them from the
+  // Archive page.
   async function deleteRow(patient) {
-    if (!window.confirm(`Remove ${patient.name}'s account? This cannot be undone.`)) return;
+    if (
+      !window.confirm(
+        `Move ${patient.name} to the Archive?\n\nTheir service records go with them. You can restore them anytime from the Archive page.`
+      )
+    )
+      return;
     setRowError("");
     try {
       await api.del(`/patients/${patient.id}`);
@@ -569,6 +577,15 @@ export default function AdminPatients({ readOnly = false }) {
     } catch (err) {
       setRowError(err.message);
     }
+  }
+
+  // "Edit" button on a patient row: opens the patient, then jumps straight
+  // to the Individual Patient Treatment Record popup where every field is
+  // editable (same popup as the green button inside Service History).
+  async function editPatient(patient) {
+    await openPatient(patient);
+    setShowHistoryModal(false);
+    setShowTreatmentModal(true);
   }
 
   async function addServiceRecord(e) {
@@ -601,13 +618,18 @@ export default function AdminPatients({ readOnly = false }) {
     setRecords((list) => list.map((r) => (r.id === record.id ? updated : r)));
   }
 
+  // Moves one service record to the Archive (restorable from the Archive page).
   async function deleteRecord(record) {
-    if (!window.confirm("Remove this service record?")) return;
-    await api.del(`/dental-records/${record.id}`);
-    setRecords((list) => list.filter((r) => r.id !== record.id));
-    setPatients((list) =>
-      list.map((p) => (p.id === selected.id ? { ...p, visit_count: Math.max(0, (p.visit_count || 0) - 1) } : p))
-    );
+    if (!window.confirm("Move this service record to the Archive?\n\nYou can restore it from the Archive page.")) return;
+    try {
+      await api.del(`/dental-records/${record.id}`);
+      setRecords((list) => list.filter((r) => r.id !== record.id));
+      setPatients((list) =>
+        list.map((p) => (p.id === selected.id ? { ...p, visit_count: Math.max(0, (p.visit_count || 0) - 1) } : p))
+      );
+    } catch (err) {
+      setRowError(err.message);
+    }
   }
 
   // Logs a new vitals reading for the currently-open patient (Vital Signs
@@ -1321,15 +1343,28 @@ export default function AdminPatients({ readOnly = false }) {
                         </span>
                       </td>
                       <td className="px-2 py-2 text-right whitespace-nowrap print:hidden">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            deleteRow(p);
-                          }}
-                          className="text-xs text-red-600 underline"
-                        >
-                          Delete
-                        </button>
+                        {!readOnly && (
+                          <>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                editPatient(p);
+                              }}
+                              className="text-xs text-forest-800 underline mr-3"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteRow(p);
+                              }}
+                              className="text-xs text-red-600 underline"
+                            >
+                              Delete
+                            </button>
+                          </>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -1406,9 +1441,11 @@ export default function AdminPatients({ readOnly = false }) {
                           />
                         </td>
                         <td className="py-2 pr-2 text-right whitespace-nowrap print:hidden">
-                          <button type="button" onClick={() => deleteRecord(r)} className="text-xs text-red-600 underline">
-                            Delete
-                          </button>
+                          {canDeleteRecord(r) && (
+                            <button type="button" onClick={() => deleteRecord(r)} className="text-xs text-red-600 underline">
+                              Delete
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))}

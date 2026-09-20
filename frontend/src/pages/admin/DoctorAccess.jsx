@@ -51,11 +51,15 @@ export default function AdminDoctorAccess() {
   }
 
   async function deleteCode(id) {
-    if (!window.confirm("Delete this access code? This can't be undone.")) return;
-    await api.del(`/doctor-access/codes/${id}`);
-    // Remove it from the list right away instead of waiting on a reload —
-    // it's gone from the database, so it shouldn't still show on screen.
-    setCodes((prev) => prev.filter((c) => c.id !== id));
+    if (!window.confirm("Move this access code to the Archive?\n\nYou can restore it from the Archive page.")) return;
+    setError("");
+    try {
+      await api.del(`/doctor-access/codes/${id}`);
+      // Take it off the list right away instead of waiting on a reload.
+      setCodes((prev) => prev.filter((c) => c.id !== id));
+    } catch (err) {
+      setError(err.message || "Could not remove that code.");
+    }
   }
 
   async function approveDoctor(id) {

@@ -198,13 +198,13 @@ export default function AdminMonthlyReport({ readOnly = false }) {
     <div className="space-y-6">
       {readOnly && (
         <div className="bg-clay-500/10 border border-clay-500 text-forest-900 text-sm rounded-lg px-3 py-2 print:hidden">
-          Preview only — doctor accounts can view the Monthly Report but cannot edit figures.
+          Preview only — doctor accounts can view the Reports page but cannot edit figures.
         </div>
       )}
       <div className="flex items-start justify-between flex-wrap gap-3 print:mb-4">
         <div>
           <h1 className="font-display text-2xl font-extrabold text-forest-950">
-            Monthly Report on Dental Services (e-FHSIS)
+            Reports on Dental Services (e-FHSIS)
           </h1>
           <p className="text-sm font-medium text-forest-700 mt-1">
             City Dental Office · City of Tayabas, Province of Quezon · {formatMonthLabel(month)}

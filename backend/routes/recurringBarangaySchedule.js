@@ -1,6 +1,7 @@
 import { Router } from "express";
 import db from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
+import { archiveRotation } from "../lib/archive.js";
 
 const router = Router();
 router.use(requireAuth, requireRole("admin"));
@@ -32,50 +33,51 @@ router.post("/", (req, res) => {
   res.status(201).json(row);
 });
 
-// PATCH /api/recurring-schedule/:id — edit a rule, or set { active: 0 } to pause it
+// PATCH /api/recurring-schedule/:id — edit a rule, or set { active: 0 } to pause it.
+// Only the fields that are sent are changed. Editing a rule affects dates the
+// rotation adds from now on; dates already posted on the schedule keep their
+// own details (edit those individually).
 router.patch("/:id", (req, res) => {
+  const existing = db.prepare(`SELECT * FROM recurring_barangay_schedule WHERE id = ?`).get(req.params.id);
+  if (!existing) return res.status(404).json({ error: "Rotation rule not found." });
+
   const { barangay_name, day_of_week, dentist, services, time_range, location, target, notes, active } = req.body;
+
+  let dow = existing.day_of_week;
+  if (day_of_week !== undefined && day_of_week !== null && day_of_week !== "") {
+    dow = Number(day_of_week);
+    if (!Number.isInteger(dow) || dow < 0 || dow > 6) {
+      return res.status(400).json({ error: "day_of_week must be 0 (Sunday) through 6 (Saturday)." });
+    }
+  }
+  const optional = (incoming, current) => (incoming === undefined ? current : String(incoming ?? "").trim() || null);
+
   db.prepare(
     `UPDATE recurring_barangay_schedule SET
-       barangay_name = COALESCE(?, barangay_name),
-       day_of_week = COALESCE(?, day_of_week),
-       dentist = COALESCE(?, dentist),
-       services = COALESCE(?, services),
-       time_range = COALESCE(?, time_range),
-       location = COALESCE(?, location),
-       target = CASE WHEN ? THEN ? ELSE target END,
-       notes = COALESCE(?, notes),
-       active = COALESCE(?, active)
+       barangay_name = ?, day_of_week = ?, dentist = ?, services = ?,
+       time_range = ?, location = ?, target = ?, notes = ?, active = ?
      WHERE id = ?`
   ).run(
-    barangay_name || null,
-    day_of_week === undefined || day_of_week === null ? null : Number(day_of_week),
-    dentist || null,
-    services || null,
-    time_range || null,
-    location || null,
-    target !== undefined ? 1 : 0,
-    target === "" || target === null ? null : Math.max(0, Math.round(Number(target)) || 0),
-    notes || null,
-    active === undefined ? null : (active ? 1 : 0),
-    req.params.id
+    String(barangay_name ?? "").trim() || existing.barangay_name,
+    dow,
+    optional(dentist, existing.dentist),
+    optional(services, existing.services),
+    optional(time_range, existing.time_range),
+    optional(location, existing.location),
+    target === undefined ? existing.target : target === "" || target === null ? null : Math.max(0, Math.round(Number(target)) || 0),
+    optional(notes, existing.notes),
+    active === undefined ? existing.active : active ? 1 : 0,
+    existing.id
   );
-  const row = db.prepare(`SELECT * FROM recurring_barangay_schedule WHERE id = ?`).get(req.params.id);
-  if (!row) return res.status(404).json({ error: "Rotation rule not found." });
-  res.json(row);
+  res.json(db.prepare(`SELECT * FROM recurring_barangay_schedule WHERE id = ?`).get(existing.id));
 });
 
-// DELETE /api/recurring-schedule/:id
-// removeFuture=true also deletes any not-yet-happened schedule rows this rule generated,
-// so turning off a rotation doesn't leave orphaned upcoming dates behind.
+// DELETE /api/recurring-schedule/:id — moves the rotation rule to the Archive.
+// removeFuture=true also archives any not-yet-happened schedule rows this
+// rule generated, so turning off a rotation doesn't leave upcoming dates behind.
 router.delete("/:id", (req, res) => {
-  if (req.query.removeFuture === "true") {
-    const today = new Date().toISOString().slice(0, 10);
-    db.prepare(
-      `DELETE FROM barangay_schedule WHERE recurring_rule_id = ? AND visit_date >= ? AND status != 'Completed'`
-    ).run(req.params.id, today);
-  }
-  db.prepare(`DELETE FROM recurring_barangay_schedule WHERE id = ?`).run(req.params.id);
+  const ok = archiveRotation(Number(req.params.id), req.query.removeFuture === "true", req.user);
+  if (!ok) return res.status(404).json({ error: "Rotation rule not found." });
   res.json({ ok: true });
 });
 

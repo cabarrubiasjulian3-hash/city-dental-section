@@ -193,7 +193,7 @@ CREATE TABLE IF NOT EXISTS dental_records (
 CREATE TABLE IF NOT EXISTS messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   patient_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  sender TEXT NOT NULL CHECK(sender IN ('patient','admin')),
+  sender TEXT NOT NULL CHECK(sender IN ('patient','admin','doctor')),
   body TEXT NOT NULL,
   sent_at TEXT DEFAULT (datetime('now'))
 );
@@ -283,6 +283,47 @@ CREATE TABLE IF NOT EXISTS tooth_conditions (
   updated_at TEXT DEFAULT (datetime('now')),
   UNIQUE(patient_id, tooth_number)
 );
+`);
+
+// Messaging now belongs to doctors (admin no longer has a Messages page), but
+// databases created before that have CHECK(sender IN ('patient','admin')) on
+// this table, which makes every doctor reply fail. SQLite can't alter a CHECK
+// constraint in place, so rebuild the table once (keeping every row).
+const messagesTableSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='messages'").get()?.sql || "";
+if (messagesTableSql && !messagesTableSql.includes("'doctor'")) {
+  db.exec(`
+    CREATE TABLE messages_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      patient_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      sender TEXT NOT NULL CHECK(sender IN ('patient','admin','doctor')),
+      body TEXT NOT NULL,
+      sent_at TEXT DEFAULT (datetime('now'))
+    );
+    INSERT INTO messages_new (id, patient_id, sender, body, sent_at)
+      SELECT id, patient_id, sender, body, sent_at FROM messages;
+    DROP TABLE messages;
+    ALTER TABLE messages_new RENAME TO messages;
+  `);
+}
+
+// Archive: "Delete"/"Remove" buttons across the portals don't destroy data —
+// they move a snapshot of the item (as JSON) here, and the admin's Archive
+// page can restore it (see lib/archive.js). entity_type is one of: patient,
+// service_record, barangay_schedule, rotation, staff, access_code.
+db.exec(`
+CREATE TABLE IF NOT EXISTS archive (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  entity_type TEXT NOT NULL,
+  entity_id INTEGER,
+  label TEXT NOT NULL,
+  detail TEXT,
+  data TEXT NOT NULL,
+  archived_by INTEGER,
+  archived_by_name TEXT,
+  archived_by_role TEXT,
+  archived_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_archive_type ON archive(entity_type);
 `);
 
 // Lightweight migration for databases created before dental_records grew the

@@ -95,3 +95,13 @@ export function IconSearch({ className = "w-[18px] h-[18px]" }) {
     </svg>
   );
 }
+
+export function IconArchive({ className = "w-[18px] h-[18px]" }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3.5" width="18" height="5" rx="1.5" />
+      <path d="M5 8.5V19a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19V8.5" />
+      <path d="M10 12.5h4" />
+    </svg>
+  );
+}

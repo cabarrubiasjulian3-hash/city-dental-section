@@ -4,6 +4,7 @@ import { requireAuth, requireRole } from "../middleware/auth.js";
 import { SERVICES } from "../lib/services.js";
 import { applyServiceRecord, revertServiceRecord } from "../lib/reportSync.js";
 import { getDoctorPatientIds, doctorNamesMatch } from "../lib/doctorMatch.js";
+import { archiveServiceRecord } from "../lib/archive.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -121,10 +122,11 @@ router.patch("/:id", requireRole("admin"), (req, res) => {
   res.json(row);
 });
 
-// Admin removes any service/procedure record, reversing whatever it had
-// tallied into the Monthly Report. A doctor can only delete a record where
-// they themselves are the "dentist" on it -- never a colleague's record,
-// even though they can see every record on a patient they share.
+// "Delete" a service record = move it to the Archive (lib/archive.js), which
+// also takes it back out of the Report tallies; restoring tallies it again.
+// A doctor can only remove a record where they themselves are the "dentist"
+// on it -- never a colleague's record, even though they can see every record
+// on a patient they share.
 router.delete("/:id", requireRole("admin", "doctor"), (req, res) => {
   const id = Number(req.params.id);
   const existing = db.prepare("SELECT * FROM dental_records WHERE id = ?").get(id);
@@ -132,8 +134,7 @@ router.delete("/:id", requireRole("admin", "doctor"), (req, res) => {
   if (req.user.role === "doctor" && !doctorNamesMatch(existing.dentist, req.user.name)) {
     return res.status(403).json({ error: "You can only delete your own service records." });
   }
-  revertServiceRecord(existing);
-  db.prepare("DELETE FROM dental_records WHERE id = ?").run(id);
+  archiveServiceRecord(id, req.user);
   res.json({ success: true });
 });
 

@@ -317,8 +317,8 @@ export default function AdminDashboard({ readOnly = false }) {
         <div>
           <h3 className="font-display text-lg font-bold text-forest-950">e-FHSIS — By Barangay</h3>
           <p className="text-sm text-forest-700">
-            Fed automatically from Patient Management's service records, plus any manual entries on the Monthly
-            Report's Barangay tab
+            Fed automatically from Patient Management's service records, plus any manual entries on the
+            Reports page's Barangay tab
             {stats.barangayGrandTotal ? ` — ${stats.barangayGrandTotal} total served across ${stats.barangaySummary.length} barangay(s).` : "."}
           </p>
         </div>
@@ -337,7 +337,7 @@ export default function AdminDashboard({ readOnly = false }) {
           ) : (
             <EmptyState>
               No barangay data logged for {barangayMonth} yet — log service records on Patient Management, or enter
-              counts on the Monthly Report → By Barangay tab.
+              counts on the Reports page → By Barangay tab.
             </EmptyState>
           )}
         </Card>

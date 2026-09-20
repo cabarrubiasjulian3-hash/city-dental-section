@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../../lib/api";
+import { useAuth } from "../../context/AuthContext";
 import { Card, StatCard, Badge, EmptyState } from "../../components/ui";
 import EditableCell from "../../components/EditableCell";
 import Modal from "../../components/Modal";
@@ -82,13 +83,29 @@ const emptyRecurringForm = {
   notes: "",
 };
 
+// Dropdown options for the Edit forms: always includes the value the row
+// already has (even if it isn't in the standard list, e.g. older free-typed
+// data), so opening Edit and saving never silently wipes a field.
+function withCurrent(options, current) {
+  return current && !options.includes(current) ? [current, ...options] : options;
+}
+
 export default function AdminBarangaySchedule({ readOnly = false }) {
+  // Remove buttons are admin-only (the API enforces it too); removed items go
+  // to the Archive page and can be restored from there.
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const [schedules, setSchedules] = useState([]);
   const [populationByBarangay, setPopulationByBarangay] = useState({});
   const [dentists, setDentists] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [error, setError] = useState("");
+  // Which schedule entry / weekly rotation is open in the Edit form (null = the
+  // form is in "add" mode), and a page-level banner for failed Remove/Edit clicks.
+  const [editingScheduleId, setEditingScheduleId] = useState(null);
+  const [editingRuleId, setEditingRuleId] = useState(null);
+  const [actionError, setActionError] = useState("");
 
   const [recurringRules, setRecurringRules] = useState([]);
   const [showRecurringForm, setShowRecurringForm] = useState(false);
@@ -122,12 +139,44 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
   }
   useEffect(load, []);
 
-  async function addSchedule(e) {
+  function openAddSchedule() {
+    setEditingScheduleId(null);
+    setForm(emptyForm);
+    setError("");
+    setShowForm(true);
+  }
+
+  // "Edit" button on a schedule row: opens the same form as "Add schedule",
+  // pre-filled with that row's details.
+  function openEditSchedule(s) {
+    setEditingScheduleId(s.id);
+    setForm({
+      barangay_name: s.barangay_name || "",
+      visit_date: s.visit_date || "",
+      time_range: s.time_range || "",
+      services: s.services || "",
+      dentist: s.dentist || "",
+      location: s.location || "",
+      target: s.target ?? "",
+      status: s.status || "Upcoming",
+      notes: s.notes || "",
+    });
+    setError("");
+    setShowForm(true);
+  }
+
+  async function saveSchedule(e) {
     e.preventDefault();
     setError("");
+    const body = { ...form, target: form.target === "" ? null : form.target };
     try {
-      await api.post("/barangay-schedule", { ...form, target: form.target === "" ? null : form.target });
+      if (editingScheduleId) {
+        await api.patch(`/barangay-schedule/${editingScheduleId}`, body);
+      } else {
+        await api.post("/barangay-schedule", body);
+      }
       setForm(emptyForm);
+      setEditingScheduleId(null);
       setShowForm(false);
       load();
     } catch (err) {
@@ -141,21 +190,57 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
   }
 
   async function removeSchedule(id) {
-    if (!window.confirm("Remove this schedule entry?")) return;
-    await api.del(`/barangay-schedule/${id}`);
-    load();
+    if (!window.confirm("Move this schedule entry to the Archive?\n\nYou can restore it from the Archive page.")) return;
+    setActionError("");
+    try {
+      await api.del(`/barangay-schedule/${id}`);
+      load();
+    } catch (err) {
+      setActionError(err.message || "Could not remove that schedule entry.");
+    }
   }
 
-  async function addRecurringRule(e) {
+  function openAddRule() {
+    setEditingRuleId(null);
+    setRecurringForm(emptyRecurringForm);
+    setRecurringError("");
+    setShowRecurringForm(true);
+  }
+
+  // "Edit" button on a weekly rotation: same form as "Set up weekly rotation",
+  // pre-filled with that rotation's details.
+  function openEditRule(r) {
+    setEditingRuleId(r.id);
+    setRecurringForm({
+      barangay_name: r.barangay_name || "",
+      day_of_week: String(r.day_of_week ?? 1),
+      dentist: r.dentist || "",
+      services: r.services || "",
+      time_range: r.time_range || "",
+      location: r.location || "",
+      target: r.target ?? "",
+      notes: r.notes || "",
+    });
+    setRecurringError("");
+    setShowRecurringForm(true);
+  }
+
+  async function saveRecurringRule(e) {
     e.preventDefault();
     setRecurringError("");
+    const body = {
+      ...recurringForm,
+      day_of_week: Number(recurringForm.day_of_week),
+      target: recurringForm.target === "" ? null : recurringForm.target,
+    };
     try {
-      await api.post("/recurring-schedule", {
-        ...recurringForm,
-        day_of_week: Number(recurringForm.day_of_week),
-        target: recurringForm.target === "" ? null : recurringForm.target,
-      });
+      if (editingRuleId) {
+        await api.patch(`/recurring-schedule/${editingRuleId}`, body);
+      } else {
+        await api.post("/recurring-schedule", body);
+      }
       setRecurringForm(emptyRecurringForm);
+      setEditingRuleId(null);
       setShowRecurringForm(false);
       load();
     } catch (err) {
@@ -170,10 +255,15 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
 
   async function removeRecurringRule(id) {
     const removeFuture = window.confirm(
-      "Also remove this rotation's upcoming (not-yet-completed) dates from the schedule?\n\nOK = remove them too\nCancel = just stop the rotation, keep dates already posted"
+      "Move this weekly rotation to the Archive.\n\nAlso move its upcoming (not-yet-completed) dates?\n\nOK = move them too\nCancel = just stop the rotation, keep dates already posted"
     );
-    await api.del(`/recurring-schedule/${id}?removeFuture=${removeFuture}`);
-    load();
+    setActionError("");
+    try {
+      await api.del(`/recurring-schedule/${id}?removeFuture=${removeFuture}`);
+      load();
+    } catch (err) {
+      setActionError(err.message || "Could not remove that rotation.");
+    }
   }
 
   const upcomingCount = useMemo(() => schedules.filter((s) => s.status === "Upcoming").length, [schedules]);
@@ -196,6 +286,9 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
           Preview only — doctor accounts can view the barangay schedule but cannot make changes.
         </div>
       )}
+      {actionError && (
+        <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-3 py-2">{actionError}</div>
+      )}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h2 className="font-display text-2xl font-bold text-forest-950">Barangay Activity Schedule</h2>
@@ -203,13 +296,13 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setShowRecurringForm(true)}
+            onClick={openAddRule}
             className="flex items-center gap-2 bg-cream-100 border border-brand-900 text-forest-900 text-sm font-semibold rounded-full px-5 py-2.5 hover:bg-cream-200"
           >
             🔁 Set up weekly rotation
           </button>
           <button
-            onClick={() => setShowForm(true)}
+            onClick={openAddSchedule}
             className="flex items-center gap-2 bg-brand-900 text-brand-50 text-sm font-semibold rounded-full px-5 py-2.5 hover:bg-brand-800"
           >
             <IconCalendar className="w-4 h-4" />
@@ -229,7 +322,7 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
           <h3 className="font-display text-lg font-bold text-forest-950">Weekly rotations</h3>
           <p className="text-xs text-forest-700 mt-0.5 mb-4">
             Fixed dentist-per-barangay days. New dates fill in on the schedule below automatically — pause a
-            rotation instead of deleting dates one by one.
+            rotation instead of removing dates one by one.
           </p>
           <div className="space-y-2">
             {recurringRules.map((r) => (
@@ -254,9 +347,16 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
                   >
                     {r.active ? "Pause" : "Resume"}
                   </button>
-                  <button onClick={() => removeRecurringRule(r.id)} className="text-xs underline text-red-700">
-                    Remove
-                  </button>
+                  {isAdmin && (
+                    <>
+                      <button onClick={() => openEditRule(r)} className="text-xs underline text-forest-800">
+                        Edit
+                      </button>
+                      <button onClick={() => removeRecurringRule(r.id)} className="text-xs underline text-red-700">
+                        Remove
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             ))}
@@ -341,9 +441,16 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
                           </div>
                         </td>
                         <td className="py-2 text-right align-middle">
-                          <button onClick={() => removeSchedule(s.id)} className="text-xs underline text-red-700">
-                            Remove
-                          </button>
+                          {isAdmin && (
+                            <div className="flex flex-col items-end gap-1">
+                              <button onClick={() => openEditSchedule(s)} className="text-xs underline text-forest-800">
+                                Edit
+                              </button>
+                              <button onClick={() => removeSchedule(s.id)} className="text-xs underline text-red-700">
+                                Remove
+                              </button>
+                            </div>
+                          )}
                         </td>
                       </tr>
                     );
@@ -389,9 +496,11 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
       </div>
 
       <Modal isOpen={showForm} onClose={() => setShowForm(false)}>
-        <h3 className="font-display text-xl font-bold text-forest-950 mb-4">Add a barangay visit date</h3>
+        <h3 className="font-display text-xl font-bold text-forest-950 mb-4">
+          {editingScheduleId ? "Edit barangay visit date" : "Add a barangay visit date"}
+        </h3>
         {error && <p className="text-sm text-red-700 mb-3">{error}</p>}
-        <form onSubmit={addSchedule} className="grid sm:grid-cols-2 gap-4">
+        <form onSubmit={saveSchedule} className="grid sm:grid-cols-2 gap-4">
           <select
             required
             value={form.barangay_name}
@@ -399,7 +508,7 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
             className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
           >
             <option value="">Select barangay…</option>
-            {TAYABAS_BARANGAYS.map((name) => (
+            {withCurrent(TAYABAS_BARANGAYS, form.barangay_name).map((name) => (
               <option key={name} value={name}>
                 {name}
               </option>
@@ -424,7 +533,7 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
             className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
           >
             <option value="">Select dentist…</option>
-            {dentists.map((name) => (
+            {withCurrent(dentists, form.dentist).map((name) => (
               <option key={name} value={name}>
                 {name}
               </option>
@@ -436,7 +545,7 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
             className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
           >
             <option value="">Select activity…</option>
-            {ACTIVITY_OPTIONS.map((activity) => (
+            {withCurrent(ACTIVITY_OPTIONS, form.services).map((activity) => (
               <option key={activity} value={activity}>
                 {activity}
               </option>
@@ -474,19 +583,22 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
             className="sm:col-span-2 rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
           />
           <button className="sm:col-span-2 bg-brand-900 text-brand-50 text-sm font-semibold rounded-full py-2.5 hover:bg-brand-800">
-            Post barangay date
+            {editingScheduleId ? "Save changes" : "Post barangay date"}
           </button>
         </form>
       </Modal>
 
       <Modal isOpen={showRecurringForm} onClose={() => setShowRecurringForm(false)}>
-        <h3 className="font-display text-xl font-bold text-forest-950 mb-1">Set up a weekly rotation</h3>
+        <h3 className="font-display text-xl font-bold text-forest-950 mb-1">
+          {editingRuleId ? "Edit weekly rotation" : "Set up a weekly rotation"}
+        </h3>
         <p className="text-sm text-forest-700 mb-4">
-          e.g. "Dr. Anthony Orias is in Camaysa every Monday" — new dates will appear on the schedule
-          automatically, no need to re-post every week.
+          {editingRuleId
+            ? "Changes apply to dates the rotation adds from now on. Dates already on the schedule keep their own details — edit those individually."
+            : 'e.g. "Dr. Anthony Orias is in Camaysa every Monday" — new dates will appear on the schedule automatically, no need to re-post every week.'}
         </p>
         {recurringError && <p className="text-sm text-red-700 mb-3">{recurringError}</p>}
-        <form onSubmit={addRecurringRule} className="grid sm:grid-cols-2 gap-4">
+        <form onSubmit={saveRecurringRule} className="grid sm:grid-cols-2 gap-4">
           <select
             required
             value={recurringForm.barangay_name}
@@ -494,7 +606,7 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
             className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
           >
             <option value="">Select barangay…</option>
-            {TAYABAS_BARANGAYS.map((name) => (
+            {withCurrent(TAYABAS_BARANGAYS, recurringForm.barangay_name).map((name) => (
               <option key={name} value={name}>
                 {name}
               </option>
@@ -518,7 +630,7 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
             className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
           >
             <option value="">Select dentist…</option>
-            {dentists.map((name) => (
+            {withCurrent(dentists, recurringForm.dentist).map((name) => (
               <option key={name} value={name}>
                 {name}
               </option>
@@ -536,7 +648,7 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
             className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
           >
             <option value="">Select activity…</option>
-            {ROTATION_ACTIVITY_OPTIONS.map((activity) => (
+            {withCurrent(ROTATION_ACTIVITY_OPTIONS, recurringForm.services).map((activity) => (
               <option key={activity} value={activity}>
                 {activity}
               </option>
@@ -563,7 +675,7 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
             className="sm:col-span-2 rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
           />
           <button className="sm:col-span-2 bg-brand-900 text-brand-50 text-sm font-semibold rounded-full py-2.5 hover:bg-brand-800">
-            Save rotation
+            {editingRuleId ? "Save changes" : "Save rotation"}
           </button>
         </form>
       </Modal>

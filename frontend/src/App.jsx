@@ -10,6 +10,7 @@ import {
   IconChat,
   IconStaff,
   IconDoctor,
+  IconArchive,
 } from "./components/icons";
 
 import Landing from "./pages/Landing";
@@ -29,6 +30,7 @@ import AdminMonthlyReport from "./pages/admin/MonthlyReport";
 import AdminMessages from "./pages/admin/Messages";
 import AdminStaff from "./pages/admin/Staff";
 import AdminDoctorAccess from "./pages/admin/DoctorAccess";
+import AdminArchive from "./pages/admin/Archive";
 
 const patientNav = [
   { to: "/patient", end: true, icon: <IconDashboard />, label: "Dashboard" },
@@ -42,10 +44,9 @@ const adminNav = [
   { to: "/admin", end: true, icon: <IconDashboard />, label: "Dashboard" },
   { to: "/admin/patients", icon: <IconUsers />, label: "Patient Management" },
   { to: "/admin/barangay-schedule", icon: <IconCalendar />, label: "Barangay Schedule" },
-  { to: "/admin/monthly-report", icon: <IconReport />, label: "Monthly Report" },
-  { to: "/admin/messages", icon: <IconChat />, label: "Messages" },
-  { to: "/admin/staff", icon: <IconStaff />, label: "Staff Management" },
+  { to: "/admin/monthly-report", icon: <IconReport />, label: "Reports" },
   { to: "/admin/doctor-access", icon: <IconDoctor />, label: "Doctor Access" },
+  { to: "/admin/archive", icon: <IconArchive />, label: "Archive" },
 ];
 
 // Doctor Portal mirrors the admin portal's pages (same components, passed
@@ -56,7 +57,7 @@ const doctorNav = [
   { to: "/doctor", end: true, icon: <IconDashboard />, label: "Dashboard" },
   { to: "/doctor/patients", icon: <IconUsers />, label: "Patient Management" },
   { to: "/doctor/barangay-schedule", icon: <IconCalendar />, label: "Barangay Schedule" },
-  { to: "/doctor/monthly-report", icon: <IconReport />, label: "Monthly Report" },
+  { to: "/doctor/monthly-report", icon: <IconReport />, label: "Reports" },
   { to: "/doctor/messages", icon: <IconChat />, label: "Messages" },
   { to: "/doctor/staff", icon: <IconStaff />, label: "Staff Management" },
 ];
@@ -102,18 +103,19 @@ export default function App() {
             <Route path="patients" element={<AdminPatients />} />
             <Route path="barangay-schedule" element={<AdminBarangaySchedule />} />
             <Route path="monthly-report" element={<AdminMonthlyReport />} />
-            <Route path="messages" element={<AdminMessages />} />
-            <Route path="staff" element={<AdminStaff />} />
             <Route path="doctor-access" element={<AdminDoctorAccess />} />
+            <Route path="archive" element={<AdminArchive />} />
           </Route>
 
           {/* Doctor Portal — same page components as Admin. Most stay
               preview-only via readOnly (Patients also allows adding a new
-              patient — see its own readOnly handling). Barangay Schedule and
-              Messages are NOT read-only for a doctor: they can log/edit
-              barangay activities and can message their own patients
-              (scoped server-side — see routes/messages.js, routes/patients.js
-              and lib/doctorMatch.js). */}
+              patient — see its own readOnly handling). Barangay Schedule,
+              Messages and Staff Management are NOT read-only for a doctor:
+              they can log/edit barangay activities, message their own
+              patients (scoped server-side — see routes/messages.js,
+              routes/patients.js and lib/doctorMatch.js), and add/edit staff.
+              Messages and Staff Management exist ONLY here — the Admin
+              Portal no longer has them. */}
           <Route
             path="/doctor"
             element={
@@ -127,7 +129,7 @@ export default function App() {
             <Route path="barangay-schedule" element={<AdminBarangaySchedule />} />
             <Route path="monthly-report" element={<AdminMonthlyReport readOnly />} />
             <Route path="messages" element={<AdminMessages />} />
-            <Route path="staff" element={<AdminStaff readOnly />} />
+            <Route path="staff" element={<AdminStaff />} />
           </Route>
         </Routes>
       </AuthProvider>
