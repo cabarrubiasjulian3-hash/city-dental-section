@@ -130,6 +130,8 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
 
   // Filters for the Schedule table (all optional; "" = no filter).
   const [filters, setFilters] = useState(EMPTY_FILTERS);
+  // Search box on the Priority Barangays card.
+  const [prioritySearch, setPrioritySearch] = useState("");
 
   function load() {
     api.get("/barangay-schedule").then(setSchedules).catch(() => {});
@@ -329,6 +331,17 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
     const scheduled = new Set(schedules.map((s) => s.barangay_name));
     return TAYABAS_BARANGAYS.filter((name) => !scheduled.has(name));
   }, [schedules]);
+
+  // Priority Barangays search: matches any part of the name, ignoring case
+  // and a leading "Barangay"/"Brgy." ("ilaya", "brgy alupay" both work).
+  const visiblePriority = useMemo(() => {
+    const q = prioritySearch
+      .toLowerCase()
+      .replace(/\b(barangay|brgy\.?)\b/g, "")
+      .trim();
+    if (!q) return notYetVisited;
+    return notYetVisited.filter((name) => name.toLowerCase().includes(q));
+  }, [notYetVisited, prioritySearch]);
 
   return (
     <div className="space-y-6">
@@ -541,7 +554,7 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
       </Card>
 
     <fieldset disabled={readOnly} style={{ display: "contents" }}>
-      <div className="mt-6 grid lg:grid-cols-3 gap-6 items-start">
+      <div className="mt-6 grid lg:grid-cols-3 gap-6 items-stretch">
         <div className="lg:col-span-2">
           <Card>
             <h3 className="font-display text-lg font-bold text-forest-950">Schedule</h3>
@@ -612,11 +625,9 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
                             type="select"
                             options={STATUS_OPTIONS}
                             value={s.status}
+                            renderDisplay={(v) => <Badge status={v} />}
                             onSave={(v) => updateSchedule(s.id, "status", v)}
                           />
-                          <div className="pl-2 mt-1">
-                            <Badge status={s.status} />
-                          </div>
                         </td>
                         <td className="py-2 text-right align-middle">
                           {canEdit && (
@@ -659,34 +670,58 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
           </Card>
         </div>
 
-        <div>
-          <Card>
-            <h3 className="font-display text-lg font-bold text-forest-950">Priority Barangays</h3>
-            <p className="text-xs text-forest-700 mt-0.5 mb-4">
-              {notYetVisited.length === 0
-                ? "Zero entries this reporting month"
-                : `${notYetVisited.length} ${notYetVisited.length === 1 ? "entry" : "entries"} this reporting month`}
-            </p>
-            {notYetVisited.length ? (
-              <div className="space-y-2">
-                {notYetVisited.map((name) => (
-                  <div
-                    key={name}
-                    className="flex items-center justify-between gap-2 bg-cream-100 rounded-xl px-4 py-3"
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="text-forest-700 shrink-0">📍</span>
-                      <span className="font-medium text-forest-950 truncate">{name}</span>
-                    </div>
-                    <span className="text-xs text-forest-700 whitespace-nowrap">
-                      {populationByBarangay[name] ? `Pop. ${populationByBarangay[name]}` : "Pop. —"}
-                    </span>
-                  </div>
-                ))}
+        {/* Priority Barangays: on wide screens this card is exactly as tall as
+            the Schedule card beside it (absolute inset-0 keeps it from making
+            the row taller) and the list scrolls inside it; on narrow screens
+            it just gets a max height. */}
+        <div className="relative lg:min-h-[420px]">
+          <Card className="flex flex-col max-h-[520px] lg:max-h-none lg:absolute lg:inset-0">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div className="min-w-0">
+                <h3 className="font-display text-lg font-bold text-forest-950">Priority Barangays</h3>
+                <p className="text-xs text-forest-700 mt-0.5">
+                  {notYetVisited.length === 0
+                    ? "Zero entries this reporting month"
+                    : prioritySearch.trim()
+                    ? `${visiblePriority.length} of ${notYetVisited.length} entries`
+                    : `${notYetVisited.length} ${notYetVisited.length === 1 ? "entry" : "entries"} this reporting month`}
+                </p>
               </div>
-            ) : (
-              <EmptyState>Every barangay has at least one entry on the schedule.</EmptyState>
-            )}
+              {notYetVisited.length > 0 && (
+                <input
+                  type="search"
+                  value={prioritySearch}
+                  onChange={(e) => setPrioritySearch(e.target.value)}
+                  placeholder="Search barangay"
+                  aria-label="Search priority barangays"
+                  className="rounded-full bg-cream-100 border border-cream-300 text-forest-950 text-xs px-3 py-1.5 w-40 focus:outline-none focus:border-forest-700"
+                />
+              )}
+            </div>
+            <div className="mt-4 flex-1 min-h-0 overflow-y-auto pr-1">
+              {visiblePriority.length ? (
+                <div className="space-y-2">
+                  {visiblePriority.map((name) => (
+                    <div
+                      key={name}
+                      className="flex items-center justify-between gap-2 bg-cream-100 rounded-xl px-4 py-3"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-forest-700 shrink-0">📍</span>
+                        <span className="font-medium text-forest-950 truncate">{name}</span>
+                      </div>
+                      <span className="text-xs text-forest-700 whitespace-nowrap">
+                        {populationByBarangay[name] ? `Pop. ${populationByBarangay[name]}` : "Pop. —"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : notYetVisited.length ? (
+                <EmptyState>No barangay matches that search.</EmptyState>
+              ) : (
+                <EmptyState>Every barangay has at least one entry on the schedule.</EmptyState>
+              )}
+            </div>
           </Card>
         </div>
       </div>

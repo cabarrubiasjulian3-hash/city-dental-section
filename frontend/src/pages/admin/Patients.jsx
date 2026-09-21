@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Pencil, Archive as ArchiveIcon, Check, X as XIcon } from "lucide-react";
 import { api } from "../../lib/api";
@@ -23,6 +23,47 @@ const BARANGAY_OPTIONS = [
 // AdminPatients' JSX) that every barangay text input below points to via
 // its `list` attribute — this is what makes typing filter the barangay
 // list live instead of showing a long scrollable dropdown.
+// ---------- Patient list search ----------
+// The search box on "All Patients" looks at everything the list knows about a
+// patient, not just the name and barangay: name parts, age, sex, birthdate,
+// address, occupation, contact number, email, guardian, place of birth, the
+// TC number, dentist, latest procedure, status (New / Returning / Completed…)
+// and flags (pregnant, senior citizen, PWD). Typing several words narrows it
+// down — every word must match something, so "female ipi 21" finds 21-year-old
+// females from Ipi. Ages and sex are matched exactly ("21" won't match 210,
+// and "male" won't also pull in every "female").
+const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+
+function patientSearchBlob(p, status) {
+  const parts = [
+    p.name, p.surname, p.first_name, p.middle_name, p.email && !p.email.endsWith("@imported.local") ? p.email : "",
+    p.barangay, p.address, p.occupation, p.place_of_birth, p.parent_guardian, p.cellphone_no,
+    p.latest_dentist, p.latest_procedure, status,
+    p.is_pregnant ? "pregnant" : "", p.is_senior_citizen ? "senior citizen senior" : "", p.is_pwd ? "pwd" : "",
+    `tc-${String(p.id).padStart(4, "0")} tc-${p.id} ${p.id}`,
+  ];
+  if (p.birthdate) {
+    const [y, m, d] = String(p.birthdate).slice(0, 10).split("-");
+    const month = MONTHS[Number(m) - 1] || "";
+    parts.push(p.birthdate, `${month} ${Number(d)} ${y}`, month, y);
+  }
+  return parts.filter(Boolean).join(" ").toLowerCase();
+}
+
+function patientMatchesSearch(p, query, status) {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  const blob = patientSearchBlob(p, status);
+  const digits = String(p.cellphone_no || "").replace(/\D/g, "");
+  return words.every((w) => {
+    if (blob.includes(w)) return true;
+    if (/^\d+$/.test(w) && p.age != null && String(p.age) === w) return true; // exact age
+    if (/^\d{4,}$/.test(w) && digits.includes(w)) return true; // phone typed without dashes/spaces
+    if ((w === "male" || w === "female") && String(p.sex || "").toLowerCase() === w) return true; // exact sex
+    return false;
+  });
+}
+
 const BARANGAY_DATALIST_ID = "barangay-datalist-options";
 
 const YES_NO = [
@@ -116,6 +157,7 @@ const CITY_PREFIX = "Tayabas City";
 
 function stripCityPrefix(address) {
   if (!address) return "";
+  if (address.trim().toLowerCase() === CITY_PREFIX.toLowerCase()) return ""; // city only, no street yet
   const prefix = `${CITY_PREFIX}, `;
   return address.startsWith(prefix) ? address.slice(prefix.length) : address;
 }
@@ -135,54 +177,197 @@ function composeDisplayAddress(barangay, address) {
   return `${brgyPart}${CITY_PREFIX}${streetPart ? ` at ${streetPart}` : ""}`;
 }
 
-// Click-to-edit barangay field with type-to-filter suggestions (via the
-// shared <datalist> below), used in the Individual Patient Treatment
-// Record's Address box in place of EditableCell's plain <select>-style
-// dropdown — that dropdown made the admin scroll through all ~50
-// barangays; this lets them type a letter and narrow the list instead.
-function BarangayCell({ value, onSave, className }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value || "");
+// Barangay text input with type-to-filter suggestions (the shared <datalist>
+// above). The suggestions are just the plain names ("Alitao", "Alsam Ibaba").
+// The word "Barangay" is shown automatically in front of whatever is typed or
+// picked — the moment the box is clicked, and it stays — but it is a label,
+// not part of the text, so nobody types it and the list still filters on the
+// plain name. `value` and everything passed to onChange/onBlur is the plain
+// name (e.g. "Alitao"). `className` styles the whole box.
+const stripBarangayWord = (t) => String(t || "").replace(/^\s*(barangay|brgy\.?)\s+/i, "");
+const canonicalBarangay = (t) => {
+  const c = stripBarangayWord(t).trim().toLowerCase();
+  return c ? TAYABAS_BARANGAYS.find((b) => b.toLowerCase() === c) : undefined;
+};
+
+function BarangayInput({ value, onChange, onBlur, onKeyDown, autoFocus, placeholder, className }) {
+  const inputRef = useRef(null);
+  const [focused, setFocused] = useState(!!autoFocus);
+  const [text, setText] = useState(value || "");
 
   useEffect(() => {
-    setDraft(value || "");
-  }, [value]);
+    if (!focused) setText(value || "");
+  }, [value, focused]);
 
-  function commit() {
-    setEditing(false);
-    const cleaned = draft.replace(/^Barangay\s+/i, "").trim();
-    if (cleaned !== (value || "")) onSave(cleaned);
+  const showPrefix = focused || !!value;
+
+  return (
+    <div
+      onMouseDown={(e) => {
+        // Clicking the "Barangay" label focuses the field too.
+        if (e.target !== inputRef.current) {
+          e.preventDefault();
+          inputRef.current?.focus();
+        }
+      }}
+      className={`flex items-center gap-1.5 focus-within:border-forest-700 ${className || ""}`}
+    >
+      {showPrefix && <span className="shrink-0 select-none text-forest-600">Barangay</span>}
+      <input
+        ref={inputRef}
+        autoFocus={autoFocus}
+        list={BARANGAY_DATALIST_ID}
+        value={focused ? text : value || ""}
+        placeholder={showPrefix ? "" : placeholder || "Type to search barangay"}
+        className="min-w-0 flex-1 bg-transparent outline-none"
+        onFocus={() => {
+          setText(value || "");
+          setFocused(true);
+        }}
+        onChange={(e) => {
+          const typed = stripBarangayWord(e.target.value);
+          setText(typed);
+          onChange(canonicalBarangay(typed) || typed);
+        }}
+        onBlur={(e) => {
+          setFocused(false);
+          const typed = stripBarangayWord(e.target.value).trim();
+          const final = canonicalBarangay(typed) || typed;
+          if (final !== (value || "")) onChange(final);
+          onBlur?.(final);
+        }}
+        onKeyDown={onKeyDown}
+      />
+    </div>
+  );
+}
+
+// Same idea for the street part of the address: "Tayabas City," is a label
+// shown INSIDE the box as soon as it is clicked (and while there's text) — it
+// is never typed and never part of the value, which is just the
+// street / sitio / landmark. withCityPrefix() adds it back when saving.
+function CityAddressInput({ value, onChange, onBlur, onKeyDown, autoFocus, placeholder, className }) {
+  const inputRef = useRef(null);
+  const [focused, setFocused] = useState(!!autoFocus);
+  const showPrefix = focused || !!value;
+  return (
+    <div
+      onMouseDown={(e) => {
+        if (e.target !== inputRef.current) {
+          e.preventDefault();
+          inputRef.current?.focus();
+        }
+      }}
+      className={`flex items-center gap-1.5 focus-within:border-forest-700 ${className || ""}`}
+    >
+      {showPrefix && <span className="shrink-0 select-none text-forest-600">{CITY_PREFIX},</span>}
+      <input
+        ref={inputRef}
+        autoFocus={autoFocus}
+        value={value || ""}
+        placeholder={showPrefix ? "" : placeholder || "Street / Sitio / Landmark"}
+        className="min-w-0 flex-1 bg-transparent outline-none"
+        onFocus={() => setFocused(true)}
+        onChange={(e) => onChange(e.target.value.replace(/^\s*tayabas city,?\s*/i, ""))}
+        onBlur={(e) => {
+          setFocused(false);
+          onBlur?.(e.target.value.trim());
+        }}
+        onKeyDown={onKeyDown}
+      />
+    </div>
+  );
+}
+
+// The Individual Patient Treatment Record's Address is one line, e.g.
+//   "Barangay Ipi, Tayabas City at Brgy. Ipilan"
+// Click it to edit: the barangay and the street each get their own box with
+// the same automatic in-box labels as the New Patient form ("Barangay" and
+// "Tayabas City,"), so nothing has to be typed but the names themselves.
+// Save with the ✓ (or Enter); ✕ (or Escape) cancels.
+function AddressLineCell({ barangay, address, onSaveBarangay, onSaveStreet }) {
+  const street = stripCityPrefix(address);
+  const [editing, setEditing] = useState(false);
+  const [brgyDraft, setBrgyDraft] = useState(barangay || "");
+  const [streetDraft, setStreetDraft] = useState(street);
+  const [saving, setSaving] = useState(false);
+
+  function startEditing() {
+    setBrgyDraft(barangay || "");
+    setStreetDraft(street);
+    setEditing(true);
   }
+
+  async function save() {
+    const b = stripBarangayWord(brgyDraft).trim();
+    const st = streetDraft.trim();
+    setSaving(true);
+    try {
+      if (b !== (barangay || "")) await onSaveBarangay(b);
+      if (st !== street) await onSaveStreet(st);
+    } finally {
+      setSaving(false);
+      setEditing(false);
+    }
+  }
+
+  const keys = (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      save();
+    }
+    if (e.key === "Escape") setEditing(false);
+  };
 
   if (!editing) {
     return (
       <button
         type="button"
-        onClick={() => setEditing(true)}
-        className={`text-left hover:underline ${className || ""}`}
+        onClick={startEditing}
+        title="Click to edit address"
+        className="text-left text-sm font-semibold text-forest-950 hover:underline"
       >
-        {value ? `Barangay ${value}` : <span className="text-forest-400 font-normal">Select barangay</span>}
+        {composeDisplayAddress(barangay, address)}
       </button>
     );
   }
 
   return (
-    <input
-      autoFocus
-      list={BARANGAY_DATALIST_ID}
-      value={draft ? `Barangay ${draft}` : draft}
-      placeholder="Type to search barangay"
-      onChange={(e) => setDraft(e.target.value.replace(/^Barangay\s+/i, ""))}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") e.currentTarget.blur();
-        if (e.key === "Escape") {
-          setDraft(value || "");
-          setEditing(false);
-        }
-      }}
-      className={`rounded-md border border-cream-300 bg-white px-2 py-1 text-sm ${className || ""}`}
-    />
+    <div className="flex flex-wrap items-center gap-2 whitespace-normal">
+      <BarangayInput
+        autoFocus
+        value={brgyDraft}
+        onChange={setBrgyDraft}
+        onKeyDown={keys}
+        className="w-56 rounded-md border border-cream-300 bg-white px-2 py-1 text-sm font-normal"
+      />
+      <CityAddressInput
+        value={streetDraft}
+        onChange={setStreetDraft}
+        onKeyDown={keys}
+        className="min-w-[240px] flex-1 rounded-md border border-cream-300 bg-white px-2 py-1 text-sm font-normal"
+      />
+      <button
+        type="button"
+        title="Save address"
+        aria-label="Save address"
+        disabled={saving}
+        onClick={save}
+        className="inline-flex h-8 w-8 items-center justify-center rounded-full text-forest-800 hover:bg-cream-200 disabled:opacity-50"
+      >
+        <Check size={16} />
+      </button>
+      <button
+        type="button"
+        title="Cancel"
+        aria-label="Cancel"
+        disabled={saving}
+        onClick={() => setEditing(false)}
+        className="inline-flex h-8 w-8 items-center justify-center rounded-full text-forest-600 hover:bg-cream-200 disabled:opacity-50"
+      >
+        <XIcon size={16} />
+      </button>
+    </div>
   );
 }
 
@@ -683,13 +868,12 @@ export default function AdminPatients({ readOnly = false }) {
     }
   }
 
-  // "Edit" button on a patient row: opens the patient, then jumps straight
-  // to the Individual Patient Treatment Record popup where every field is
-  // editable (same popup as the green button inside Service History).
-  async function editPatient(patient) {
-    await openPatient(patient);
-    setShowHistoryModal(false);
-    setShowTreatmentModal(true);
+  // Pencil on a patient row: opens the Service History popup — the same one
+  // as clicking the row. From there the pencil on a service record edits it
+  // (with the Oral Health Chart), and the green "Individual Patient Treatment
+  // Record" button opens the full treatment record when that's what's needed.
+  function editPatient(patient) {
+    return openPatient(patient);
   }
 
   async function addServiceRecord(e) {
@@ -880,23 +1064,17 @@ export default function AdminPatients({ readOnly = false }) {
     }
   }
 
-  const filtered = search.trim()
-    ? patients.filter((p) =>
-        [p.name, p.email, p.barangay, p.address, p.occupation, p.latest_dentist]
-          .filter(Boolean)
-          .some((v) => v.toLowerCase().includes(search.trim().toLowerCase()))
-      )
-    : patients;
+  const filtered = search.trim() ? patients.filter((p) => patientMatchesSearch(p, search, statusFor(p))) : patients;
 
   return (
     <div className="patient-page space-y-6">
       {/* Shared typeahead source for every barangay input on this page —
           browsers filter these options live as the admin types, so this
           one list backs both the New Patient form's barangay field and
-          the Individual Patient Treatment Record's BarangayCell. */}
+          the Individual Patient Treatment Record's address line (AddressLineCell). */}
       <datalist id={BARANGAY_DATALIST_ID}>
         {TAYABAS_BARANGAYS.map((brgy) => (
-          <option key={brgy} value={`Barangay ${brgy}`} />
+          <option key={brgy} value={brgy} />
         ))}
       </datalist>
       <style>{`
@@ -1067,22 +1245,18 @@ export default function AdminPatients({ readOnly = false }) {
               <label className="text-xs text-forest-700 sm:col-span-2">
                 Address
                 <div className="mt-1.5 flex gap-2 items-center">
-                  <input
-                    list={BARANGAY_DATALIST_ID}
+                  <BarangayInput
                     placeholder="Type to search barangay"
                     className="shrink-0 rounded-[10px] border border-[#ddd8c6] bg-white px-3 py-2.5 text-sm text-forest-950 basis-2/5"
-                    value={newPatientForm.barangay ? `Barangay ${newPatientForm.barangay}` : ""}
-                    onChange={(e) =>
-                      setNewPatientField("barangay", e.target.value.replace(/^Barangay\s+/i, ""))
-                    }
+                    value={newPatientForm.barangay}
+                    onChange={(v) => setNewPatientField("barangay", v)}
                     onBlur={checkNewPatientDuplicate}
                   />
-                  <span className="shrink-0 text-sm text-forest-600">Tayabas City,</span>
-                  <input
+                  <CityAddressInput
                     className="flex-1 rounded-[10px] border border-[#ddd8c6] bg-white px-3 py-2.5 text-sm"
                     placeholder="Street / Sitio / Landmark"
                     value={newPatientForm.address}
-                    onChange={(e) => setNewPatientField("address", e.target.value)}
+                    onChange={(v) => setNewPatientField("address", v)}
                   />
                 </div>
               </label>
@@ -1467,8 +1641,8 @@ export default function AdminPatients({ readOnly = false }) {
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search name or barangay"
-                className="rounded-full bg-cream-100 border border-cream-300 text-forest-950 text-xs px-3 py-1.5 w-48 focus:outline-none focus:border-forest-700"
+                placeholder="Search name, barangay, age, occupation…"
+                className="rounded-full bg-cream-100 border border-cream-300 text-forest-950 text-xs px-3 py-1.5 w-64 focus:outline-none focus:border-forest-700"
               />
             </div>
           }
@@ -1772,6 +1946,22 @@ export default function AdminPatients({ readOnly = false }) {
             )}
             {recordEditError && <p className="text-sm text-red-700">{recordEditError}</p>}
 
+            {/* While a row is being edited (pencil icon), the patient's Oral
+                Health Chart shows up right below it — editable, so what was
+                found at that visit can be corrected in the same place. Only
+                admins/doctors get the pencil, and the server only accepts
+                tooth-chart changes from them too. Each tooth click is saved
+                straight to the patient; the ✓ on the row saves the record. */}
+            {editingRecordId !== null && (
+              <div className="pt-2 border-t border-cream-200 space-y-2">
+                <p className="text-xs text-forest-700">
+                  Oral Health Chart — click a tooth to update its condition. Tooth changes are saved right away;
+                  use the ✓ on the row above to save the service record itself.
+                </p>
+                <ToothChart patientId={selected.id} isAdmin />
+              </div>
+            )}
+
             <div className="grid gap-3 pt-2 border-t border-cream-200 sm:grid-cols-3">
               <button
                 type="button"
@@ -2022,21 +2212,14 @@ export default function AdminPatients({ readOnly = false }) {
                   {/* Row 3 */}
                   <div className="bg-cream-100 rounded-xl px-3 py-1.5 w-full sm:col-span-3 overflow-x-auto">
                     <p className="text-[10px] uppercase tracking-wide text-forest-700">Address</p>
-                    <div className="flex flex-nowrap items-center gap-x-2 font-semibold text-forest-950 mt-0.5 whitespace-nowrap">
-                      <BarangayCell
-                        value={selected.barangay}
-                        onSave={(v) => savePatientField(selected, "barangay", v)}
-                      />
-                      <span className="font-normal text-xs text-forest-600 shrink-0">Tayabas City,</span>
-                      <EditableCell
-                        value={stripCityPrefix(selected.address)}
-                        placeholder="Street / Sitio / Landmark"
-                        onSave={(v) => savePatientField(selected, "address", withCityPrefix(v))}
+                    <div className="mt-0.5">
+                      <AddressLineCell
+                        barangay={selected.barangay}
+                        address={selected.address}
+                        onSaveBarangay={(v) => savePatientField(selected, "barangay", v)}
+                        onSaveStreet={(v) => savePatientField(selected, "address", withCityPrefix(v))}
                       />
                     </div>
-                    <p className="text-[11px] font-normal text-forest-500 mt-1">
-                      {composeDisplayAddress(selected.barangay, selected.address)}
-                    </p>
                   </div>
                   <div className="bg-cream-100 rounded-xl px-3 py-1.5 w-full">
                     <p className="text-[10px] uppercase tracking-wide text-forest-700">Parent / Guardian</p>

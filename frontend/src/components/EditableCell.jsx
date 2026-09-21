@@ -3,7 +3,10 @@ import { useEffect, useRef, useState } from "react";
 // Spreadsheet-style editable text/date/select cell. Click to edit, Enter or
 // blur to save, Escape to cancel. Renders a plain <input>/<select> so it
 // behaves the way a spreadsheet cell would.
-export default function EditableCell({ value, type = "text", options, placeholder, onSave, className = "" }) {
+// `renderDisplay` (optional) replaces how the value looks while NOT editing —
+// e.g. a status pill instead of plain text. Clicking it still opens the
+// normal input/select.
+export default function EditableCell({ value, type = "text", options, placeholder, onSave, className = "", renderDisplay }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value ?? "");
   const [saving, setSaving] = useState(false);
@@ -43,7 +46,7 @@ export default function EditableCell({ value, type = "text", options, placeholde
           saving ? "opacity-50" : ""
         } ${className}`}
       >
-        {display || <span className="text-forest-400 italic">{placeholder || "—"}</span>}
+        {renderDisplay && value ? renderDisplay(value) : display || <span className="text-forest-400 italic">{placeholder || "—"}</span>}
       </button>
     );
   }

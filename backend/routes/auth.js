@@ -6,6 +6,13 @@ import db from "../db.js";
 import { calcAge } from "../lib/age.js";
 import { sendRecoveryCodeEmail } from "../lib/mailer.js";
 import { requireAuth } from "../middleware/auth.js";
+import {
+  norm,
+  isUnclaimedImportedRow,
+  findCandidatesByIdentity,
+  samePerson,
+  mergeDuplicateInto,
+} from "../lib/patientMatch.js";
 const router = Router();
 
 function signToken(user) {
@@ -16,107 +23,25 @@ function signToken(user) {
   );
 }
 
-function norm(s) {
-  return String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-// Address-specific normalization, on top of norm() above. The "New Patient
-// Record" form (admin/Patients.jsx) always prefixes the street address with
-// "Tayabas City, " (see CITY_PREFIX there), but a patient's own Signup form
-// saves the raw address with no such prefix — so the exact same real-world
-// address ends up as two different strings depending on which form entered
-// it, and used to make the address side of samePerson() below fail to agree
-// even when everything else about the record matched. Stripping the prefix
-// here, on both sides, means it no longer matters which form the address
-// came from.
-const CITY_PREFIX_RE = /^tayabas city,\s*/i;
-function normAddress(s) {
-  return norm(s).replace(CITY_PREFIX_RE, "");
-}
-
-// Rows created by the Excel importer get a placeholder @imported.local email
-// and never had a real password set — they're "on file" but nobody has
-// claimed them with a real login yet.
-function isUnclaimedImportedRow(user) {
-  return user.email.endsWith("@imported.local");
-}
-
-// Best-available identity match for a patient: prefer surname + first name
-// (the authoritative columns — admin edits these one at a time via inline
-// cells, and PATCH /patients/:id only recomposes `name` if a NEW name is
-// sent in that same request, so `name` can silently go stale/out of sync
-// with a just-edited surname/first_name). Falls back to the composed `name`
-// for rows that only ever had that (Excel imports before separate columns
-// existed, or any row with a blank surname/first_name).
-const findCandidatesByIdentity = db.prepare(
-  `SELECT * FROM users
-   WHERE role = 'patient' AND id != ?
-     AND (
-       (TRIM(COALESCE(surname,'')) != '' AND TRIM(COALESCE(first_name,'')) != ''
-        AND LOWER(TRIM(surname)) = ? AND LOWER(TRIM(first_name)) = ?)
-       OR LOWER(name) = ?
-     )`
-);
-
-// --- Late-match absorption (runs on every patient login) ---------------
+// Late-match absorption (runs on every patient login and every /auth/me).
 // Registration-time matching (see /register below) only checks ONCE, at
-// signup — so it can't help someone who signs up for a real account BEFORE
-// the clinic has ever logged a visit for them. If an admin later creates a
-// "New Patient Record" for that same person, that record gets its own new
-// row, leaving the patient's dental history stuck on a row they aren't
-// logged in as. This runs the same kind of match on every login instead, so
-// it's caught the next time they sign in, regardless of which happened first.
-//
-// Identity is decided on surname+first_name (or composed name as fallback —
-// see findCandidatesByIdentity above), plus birthdate or address agreeing
-// (whichever side actually has both filled in) — never email. Only merges
-// when unambiguous (exactly one candidate) — this deliberately isn't
-// limited to placeholder/imported rows, so it also catches two real
-// accounts that turned out to be the same person.
-const reassignDentalRecords = db.prepare("UPDATE dental_records SET patient_id = ? WHERE patient_id = ?");
-const reassignVitals = db.prepare("UPDATE vitals SET patient_id = ? WHERE patient_id = ?");
-const reassignToothConditions = db.prepare("UPDATE tooth_conditions SET patient_id = ? WHERE patient_id = ?");
-const reassignMessages = db.prepare("UPDATE messages SET patient_id = ? WHERE patient_id = ?");
-const deleteDuplicateUser = db.prepare("DELETE FROM users WHERE id = ?");
-
-// True when `a` and `b` are confidently the same person: same identity
-// (caller already filtered on that via findCandidatesByIdentity) plus
-// agreement on birthdate or address — whichever of the two actually has a
-// value on BOTH sides, since an admin's quick "New Patient Record" often
-// doesn't have every field filled in.
-function samePerson(a, b) {
-  const birthdateAgrees = a.birthdate && b.birthdate && a.birthdate === b.birthdate;
-  const addressAgrees = a.address && b.address && normAddress(a.address) === normAddress(b.address);
-  return Boolean(birthdateAgrees || addressAgrees);
-}
-
+// signup — so it can't help someone who signs up BEFORE the clinic has ever
+// logged a visit for them. If an admin later creates a "New Patient Record"
+// for that same person, that record gets its own row, leaving the patient's
+// dental history stuck on a row they aren't logged in as. This runs the same
+// match on every login instead. Only merges when unambiguous (exactly one
+// candidate) — this deliberately isn't limited to placeholder/imported rows,
+// so it also catches two real accounts that turned out to be the same person.
 function absorbLateMatchingRecord(user) {
   if (user.role !== "patient") return false;
-  const sameIdentity = findCandidatesByIdentity.all(
-    user.id,
-    norm(user.surname || ""),
-    norm(user.first_name || ""),
-    norm(user.name)
-  );
-  const candidates = sameIdentity.filter((c) => samePerson(user, c));
+  const candidates = findCandidatesByIdentity(user.id, user).filter((c) => samePerson(user, c));
   if (candidates.length !== 1) return false; // none, or ambiguous (2+) — leave alone for a human to check
-
-  const dup = candidates[0];
-  const merge = db.transaction(() => {
-    reassignDentalRecords.run(user.id, dup.id);
-    reassignVitals.run(user.id, dup.id);
-    reassignToothConditions.run(user.id, dup.id);
-    reassignMessages.run(user.id, dup.id);
-    deleteDuplicateUser.run(dup.id);
-  });
   try {
-    merge();
+    mergeDuplicateInto(user, candidates[0]);
     return true;
   } catch {
-    // e.g. a tooth_conditions UNIQUE(patient_id, tooth_number) collision if
-    // both rows somehow already had a condition logged for the same tooth —
-    // extremely unlikely for a row nobody has ever logged into, but don't
-    // fail the login over a best-effort cleanup; just leave it for later.
+    // Don't fail the login over a best-effort cleanup; leave it for later
+    // (or for merge-duplicates.js, which reports it).
     return false;
   }
 }
@@ -161,9 +86,9 @@ const claimImportedRow = db.prepare(
      address = COALESCE(?, address),
      occupation = COALESCE(?, occupation),
      barangay = COALESCE(?, barangay),
-     surname = COALESCE(?, surname),
-     first_name = COALESCE(?, first_name),
-     middle_name = COALESCE(?, middle_name),
+     surname = COALESCE(NULLIF(TRIM(surname), ''), ?),
+     first_name = COALESCE(NULLIF(TRIM(first_name), ''), ?),
+     middle_name = COALESCE(NULLIF(TRIM(middle_name), ''), ?),
      is_pregnant = ?, is_pwd = ?, is_senior_citizen = ?
    WHERE id = ?`
 );
@@ -251,24 +176,20 @@ router.post("/register", (req, res) => {
   const pregnant = is_pregnant ? 1 : 0;
   const pwd = is_pwd ? 1 : 0;
 
-  // Look for this person in the clinic's existing records — by surname +
-  // first name when we have both (far more reliable than the composed
-  // "name" string, which can differ in punctuation or middle-name
-  // formatting — "A." vs "A" vs left out — even for the same person), or by
-  // the composed name otherwise (Excel-imported rows only ever have that
-  // single combined column, no separate surname/first_name).
-  const candidates = findCandidatesByIdentity.all(
-    -1, // no id to exclude yet — this account doesn't exist
-    norm(surname || ""),
-    norm(first_name || ""),
-    norm(name)
-  );
+  // Look for this person in the clinic's existing records: same surname,
+  // compatible first name (a missing 2nd name is fine — see
+  // findCandidatesByIdentity), and agreeing on birthdate — or barangay/address
+  // when a birthdate isn't available (see samePerson in lib/patientMatch.js).
+  const probe = { name, surname, first_name, middle_name, birthdate, barangay, address, sex };
+  const candidates = findCandidatesByIdentity(-1, probe); // -1: this account doesn't exist yet
+  const confirmed = candidates.filter((c) => samePerson(probe, c));
   let match = null;
-  if (barangay) {
-    match = candidates.find((c) => norm(c.barangay || "") === norm(barangay)) || null;
-  }
-  if (!match && candidates.length === 1) {
-    // Unambiguous even without a barangay to narrow it down.
+  if (confirmed.length === 1) {
+    match = confirmed[0];
+  } else if (confirmed.length > 1 && barangay) {
+    match = confirmed.find((c) => norm(c.barangay || "") === norm(barangay)) || null;
+  } else if (!confirmed.length && candidates.length === 1 && !(birthdate && candidates[0].birthdate)) {
+    // Only one possible person and nothing contradicts it.
     match = candidates[0];
   }
 

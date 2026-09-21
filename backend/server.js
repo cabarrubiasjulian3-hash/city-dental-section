@@ -17,12 +17,23 @@ import doctorAccessRoutes from "./routes/doctorAccess.js";
 import archiveRoutes from "./routes/archive.js";
 import userRoutes from "./routes/users.js";
 import { auditDoctorChanges } from "./middleware/auditLog.js";
+import { autoCompletePastSchedules } from "./lib/scheduleStatus.js";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 // Logs what doctors change (patient records, barangay schedule) for the notification bell.
 app.use("/api", auditDoctorChanges);
+
+// Barangay schedule entries whose date has passed flip to "Completed" on their
+// own (see lib/scheduleStatus.js): before each request (throttled), at
+// startup, and hourly for a server that sits idle overnight.
+app.use("/api", (req, res, next) => {
+  autoCompletePastSchedules();
+  next();
+});
+autoCompletePastSchedules({ force: true });
+setInterval(() => autoCompletePastSchedules({ force: true }), 60 * 60 * 1000).unref();
 
 app.get("/api/health", (req, res) => res.json({ ok: true, service: "city-dental-section-api" }));
 

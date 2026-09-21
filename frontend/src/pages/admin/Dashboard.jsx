@@ -91,6 +91,38 @@ export default function AdminDashboard({ readOnly = false }) {
         </p>
       </div>
 
+      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard
+          label="Overall Total Served"
+          value={stats.overallTotalServed}
+          subtitle={formatMonthLabel(stats.month)}
+          icon={<Users size={16} />}
+        />
+        <StatCard
+          label="Male / Female"
+          value={`${stats.male} / ${stats.female}`}
+          subtitle="Sub-total M / F"
+          icon={<Activity size={16} />}
+        />
+        <StatCard
+          label="Barangays Reporting"
+          value={`${stats.barangaysReporting}/${stats.barangaysTotal}`}
+          subtitle={`${stats.barangaysTotal - stats.barangaysReporting} with zero entries`}
+          icon={<MapPin size={16} />}
+        />
+        <StatCard
+          label="vs. Last Month"
+          value={stats.vsLastMonthPct == null ? "—" : `${stats.vsLastMonthPct > 0 ? "+" : ""}${stats.vsLastMonthPct}%`}
+          subtitle={
+            stats.lastMonthTotal == null
+              ? undefined
+              : `${stats.lastMonthTotal.toLocaleString()} → ${stats.overallTotalServed.toLocaleString()}`
+          }
+          icon={<TrendingUp size={16} />}
+        />
+      </div>
+
+      {/* Doctor portal only: the four clinic-wide totals above come first, then this. */}
       {user?.role === "doctor" && (
         <Card title="My Patients" subtitle="Based on your name as the attending dentist on their records">
           <div className="flex items-center gap-6">
@@ -135,37 +167,6 @@ export default function AdminDashboard({ readOnly = false }) {
           </div>
         </Card>
       )}
-
-      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          label="Overall Total Served"
-          value={stats.overallTotalServed}
-          subtitle={formatMonthLabel(stats.month)}
-          icon={<Users size={16} />}
-        />
-        <StatCard
-          label="Male / Female"
-          value={`${stats.male} / ${stats.female}`}
-          subtitle="Sub-total M / F"
-          icon={<Activity size={16} />}
-        />
-        <StatCard
-          label="Barangays Reporting"
-          value={`${stats.barangaysReporting}/${stats.barangaysTotal}`}
-          subtitle={`${stats.barangaysTotal - stats.barangaysReporting} with zero entries`}
-          icon={<MapPin size={16} />}
-        />
-        <StatCard
-          label="vs. Last Month"
-          value={stats.vsLastMonthPct == null ? "—" : `${stats.vsLastMonthPct > 0 ? "+" : ""}${stats.vsLastMonthPct}%`}
-          subtitle={
-            stats.lastMonthTotal == null
-              ? undefined
-              : `${stats.lastMonthTotal.toLocaleString()} → ${stats.overallTotalServed.toLocaleString()}`
-          }
-          icon={<TrendingUp size={16} />}
-        />
-      </div>
 
       <Card title="Clinic Statistics — BOHC by Age Group" subtitle={`Recipients served, ${formatMonthLabel(stats.month)}`}>
         {stats.ageGroupBreakdown.some((b) => b.value > 0) ? (

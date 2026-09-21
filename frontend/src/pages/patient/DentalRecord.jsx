@@ -87,16 +87,26 @@ export default function PatientDentalRecord() {
             <h3 className="font-display text-xl font-bold text-ink-900 mb-1">{selected.procedure}</h3>
             <p className="text-sm text-forest-700 mb-5">View only — you can't change these details.</p>
 
-            <dl className="grid grid-cols-[8rem_1fr] gap-y-2 text-sm mb-6">
-              <dt className="text-forest-700 font-medium">Date</dt>
-              <dd className="text-forest-950">{selected.record_date}</dd>
-              <dt className="text-forest-700 font-medium">Procedure</dt>
-              <dd className="text-forest-950">{selected.procedure}</dd>
-              <dt className="text-forest-700 font-medium">Dentist</dt>
-              <dd className="text-forest-950">{selected.dentist || "—"}</dd>
-              <dt className="text-forest-700 font-medium">Notes</dt>
-              <dd className="text-forest-950 whitespace-pre-line">{selected.notes || "—"}</dd>
-            </dl>
+            {/* One row: Date | Procedure | Dentist | Notes (label above value).
+                On a narrow phone screen it wraps to two per row. */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-4 text-sm mb-6 pb-5 border-b border-cream-200">
+              <div>
+                <p className="text-xs uppercase tracking-wide font-semibold text-forest-700">Date</p>
+                <p className="mt-1 text-forest-950">{selected.record_date}</p>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-wide font-semibold text-forest-700">Procedure</p>
+                <p className="mt-1 text-forest-950">{selected.procedure}</p>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-wide font-semibold text-forest-700">Dentist</p>
+                <p className="mt-1 text-forest-950">{selected.dentist || "—"}</p>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-wide font-semibold text-forest-700">Notes</p>
+                <p className="mt-1 text-forest-950 whitespace-pre-line">{selected.notes || "—"}</p>
+              </div>
+            </div>
 
             <ToothChart patientId={user.id} isAdmin={false} />
             <p className="text-xs text-forest-600 text-center mt-2">

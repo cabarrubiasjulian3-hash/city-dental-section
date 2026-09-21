@@ -90,7 +90,17 @@ export default function PortalLayout({ title, subtitle, navItems }) {
   const hasNotifications = user?.role === "admin" || user?.role === "doctor";
   const [notifications, setNotifications] = useState([]);
   const [notifOpen, setNotifOpen] = useState(false);
-  const [lastSeenAt, setLastSeenAt] = useState(() => localStorage.getItem("cds_notifications_seen_at") || "");
+  // "Last time this person opened the bell" is remembered PER ACCOUNT. It used
+  // to be one shared value for the whole browser, so testing on a single
+  // browser went wrong: a doctor opening their bell after making a change
+  // marked it as "seen", and when the admin logged in next on that browser
+  // the change no longer counted as new — no number on the bell, even though
+  // it was in the list.
+  const seenKey = user ? `cds_notifications_seen_at:${user.role}:${user.id}` : null;
+  const [lastSeenAt, setLastSeenAt] = useState(() => (seenKey ? localStorage.getItem(seenKey) || "" : ""));
+  useEffect(() => {
+    setLastSeenAt(seenKey ? localStorage.getItem(seenKey) || "" : "");
+  }, [seenKey]);
 
   useEffect(() => {
     if (!hasNotifications) return;
@@ -98,9 +108,21 @@ export default function PortalLayout({ title, subtitle, navItems }) {
       api.get("/notifications").then(setNotifications).catch(() => {});
     }
     load();
-    // Doctors are answering a live chat, so check more often than admin.
-    const interval = setInterval(load, user?.role === "doctor" ? 10000 : 30000);
-    return () => clearInterval(interval);
+    // Doctors are answering a live chat, so they check a bit more often.
+    const interval = setInterval(load, user?.role === "doctor" ? 10000 : 15000);
+    // Check right away when the tab/window is looked at again, so switching
+    // back to this page shows the number immediately instead of after the
+    // next timer tick (browsers slow timers down in background tabs).
+    const onVisible = () => {
+      if (document.visibilityState === "visible") load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", load);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", load);
+    };
   }, [hasNotifications, user?.role]);
 
   // Your own changes (mine: true — a doctor's own edits in the doctor bell)
@@ -114,7 +136,7 @@ export default function PortalLayout({ title, subtitle, navItems }) {
       const next = !open;
       if (next) {
         const now = new Date().toISOString();
-        localStorage.setItem("cds_notifications_seen_at", now);
+        if (seenKey) localStorage.setItem(seenKey, now);
         setLastSeenAt(now);
       }
       return next;
