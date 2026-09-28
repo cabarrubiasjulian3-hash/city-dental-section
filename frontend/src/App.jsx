@@ -10,7 +10,6 @@ import {
   IconReport,
   IconChat,
   IconStaff,
-  IconDoctor,
   IconArchive,
 } from "./components/icons";
 
@@ -32,7 +31,6 @@ import AdminMonthlyReport from "./pages/admin/MonthlyReport";
 import AdminMessages from "./pages/admin/Messages";
 import AdminStaff from "./pages/admin/Staff";
 import AdminUserManagement from "./pages/admin/UserManagement";
-import AdminDoctorAccess from "./pages/admin/DoctorAccess";
 import AdminArchive from "./pages/admin/Archive";
 
 const patientNav = [
@@ -49,9 +47,9 @@ const adminNav = [
   { to: "/admin/patients", icon: <IconUsers />, label: "Patient Management" },
   { to: "/admin/barangay-schedule", icon: <IconCalendar />, label: "Barangay Schedule" },
   { to: "/admin/monthly-report", icon: <IconReport />, label: "Reports" },
+  // Staff Management is one page: Staff Directory + Doctor Access (no separate Doctor Access item).
   { to: "/admin/staff", icon: <IconStaff />, label: "Staff Management" },
   { to: "/admin/users", icon: <UserCog size={18} />, label: "User Management" },
-  { to: "/admin/doctor-access", icon: <IconDoctor />, label: "Doctor Access" },
   { to: "/admin/archive", icon: <IconArchive />, label: "Archive" },
 ];
 
@@ -63,7 +61,6 @@ const doctorNav = [
   { to: "/doctor", end: true, icon: <IconDashboard />, label: "Dashboard" },
   { to: "/doctor/patients", icon: <IconUsers />, label: "Patient Management" },
   { to: "/doctor/barangay-schedule", icon: <IconCalendar />, label: "Barangay Schedule" },
-  { to: "/doctor/monthly-report", icon: <IconReport />, label: "Reports" },
   { to: "/doctor/messages", icon: <IconChat />, label: "Messages" },
 ];
 
@@ -111,7 +108,8 @@ export default function App() {
             <Route path="monthly-report" element={<AdminMonthlyReport />} />
             <Route path="staff" element={<AdminStaff />} />
             <Route path="users" element={<AdminUserManagement />} />
-            <Route path="doctor-access" element={<AdminDoctorAccess />} />
+            {/* Old "Doctor Access" page — merged into the Staff Management page. */}
+            <Route path="doctor-access" element={<Navigate to="/admin/staff#doctor-access" replace />} />
             <Route path="archive" element={<AdminArchive />} />
           </Route>
 
@@ -135,7 +133,6 @@ export default function App() {
             <Route index element={<AdminDashboard readOnly />} />
             <Route path="patients" element={<AdminPatients readOnly />} />
             <Route path="barangay-schedule" element={<AdminBarangaySchedule />} />
-            <Route path="monthly-report" element={<AdminMonthlyReport readOnly />} />
             <Route path="messages" element={<AdminMessages />} />
           </Route>
         </Routes>

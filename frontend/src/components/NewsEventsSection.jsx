@@ -86,11 +86,11 @@ export default function NewsEventsSection() {
   const [featured, ...rest] = NEWS_ITEMS;
 
   return (
-    <section className="max-w-6xl mx-auto px-6 pb-20">
+    <section className="max-w-[90rem] mx-auto px-6 sm:px-8 lg:px-12 pb-20">
       <div className="bg-[#c7f5a8] rounded-3xl shadow-lg p-8 md:p-10">
         <h2 className="font-display text-2xl md:text-3xl font-bold text-ink-900 mb-8">NEWS and EVENTS</h2>
 
-        <div className="grid md:grid-cols-3 gap-6 items-stretch">
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6 items-stretch">
           {featured && <FeaturedNewsCard item={featured} />}
 
           <div className="flex flex-col gap-6">

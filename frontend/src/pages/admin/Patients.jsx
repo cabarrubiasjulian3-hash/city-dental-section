@@ -8,6 +8,7 @@ import Modal from "../../components/Modal";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import ToothChart from "../../components/ToothChart";
 import EditableCell, { SEX_OPTIONS } from "../../components/EditableCell";
+import NotesCell from "../../components/NotesCell";
 import EditedBy from "../../components/EditedBy";
 import { SERVICE_OPTIONS, visitsRequiredFor, computeRecordStatuses } from "../../lib/services";
 import { REPORT_FIELD_LABELS } from "../../lib/reportFieldLabels";
@@ -1839,11 +1840,12 @@ export default function AdminPatients({ readOnly = false }) {
                             </select>
                           </td>
                           <td className="py-2 pr-2 min-w-[160px]">
-                            <input
+                            <NotesCell
                               value={recordDraft.notes}
-                              placeholder="Notes"
-                              onChange={(e) => setRecordDraft((d) => ({ ...d, notes: e.target.value }))}
-                              className="w-full px-2 py-1.5 rounded border border-forest-500 bg-cream-50 text-sm italic"
+                              title={`${r.procedure || "Service record"}${
+                                r.record_date ? ` · ${new Date(r.record_date).toLocaleDateString()}` : ""
+                              }`}
+                              onSave={(v) => setRecordDraft((d) => ({ ...d, notes: v }))}
                             />
                           </td>
                           <td className="py-2 pr-2">
@@ -1899,11 +1901,12 @@ export default function AdminPatients({ readOnly = false }) {
                             />
                           </td>
                           <td className="py-2 pr-2 min-w-[160px]">
-                            <EditableCell
+                            <NotesCell
                               value={r.notes}
-                              placeholder="Notes"
+                              title={`${r.procedure || "Service record"}${
+                                r.record_date ? ` · ${new Date(r.record_date).toLocaleDateString()}` : ""
+                              }`}
                               onSave={(v) => saveRecordField(r, "notes", v)}
-                              className="italic"
                             />
                           </td>
                           <td className="py-2 pr-2">

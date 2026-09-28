@@ -84,12 +84,12 @@ export default function Landing() {
     <div className="min-h-screen bg-cream-100">
       {/* Top bar */}
      <header className="bg-[linear-gradient(to_right,_#395d2e_0%,_#395d2e_45%,_#ececc3_100%)] border-t border-[#181f14] text-cream-50">
-        <div className="max-w-6xl mx-auto flex items-center justify-between px-1 py-5">
+        <div className="max-w-[90rem] mx-auto flex flex-wrap items-center justify-between gap-x-4 gap-y-3 px-4 sm:px-8 lg:px-12 py-4 sm:py-5">
           <div className="flex items-center gap-3">
-           <div className="w-14 h-14 rounded-full bg-cream-50/10 flex items-center justify-center overflow-hidden">
+           <div className="w-11 h-11 sm:w-14 sm:h-14 shrink-0 rounded-full bg-cream-50/10 flex items-center justify-center overflow-hidden">
               <img src="/logo.png" alt="City Dental Section logo" className="w-full h-full object-cover" />
             </div>
-            <div className="w-14 h-14 rounded-full bg-cream-50/10 flex items-center justify-center overflow-hidden">
+            <div className="w-11 h-11 sm:w-14 sm:h-14 shrink-0 rounded-full bg-cream-50/10 flex items-center justify-center overflow-hidden">
               <img src="/city-hall-seal.png" alt="Tayabas City Hall seal" className="w-full h-full object-cover" />
             </div>
             <div>
@@ -97,25 +97,25 @@ export default function Landing() {
               <p className="text-xs text-cream-100/80">City of Tayabas, Quezon Province</p>
             </div>
           </div>
-          <nav className="flex items-center gap-3">
+          <nav className="flex flex-wrap items-center gap-2 sm:gap-3">
             <button
               type="button"
               onClick={() => setAdminLoginOpen(true)}
-              className="text-sm font-bold bg-white text-ink-900 border border-forest-800 rounded-full px-5 py-2 shadow-[3px_3px_4px_0_rgba(61,83,53,0.6)] hover:bg-[#859336] hover:border-transparent hover:text-cream-50 transition-colors"
+              className="text-xs sm:text-sm font-bold bg-white text-ink-900 border border-forest-800 rounded-full px-3.5 sm:px-5 py-1.5 sm:py-2 shadow-[3px_3px_4px_0_rgba(61,83,53,0.6)] hover:bg-[#859336] hover:border-transparent hover:text-cream-50 transition-colors"
             >
               Admin Portal
             </button>
             <button
               type="button"
               onClick={() => setSignupOpen(true)}
-              className="text-sm font-bold bg-white text-ink-900 border border-forest-800 rounded-full px-5 py-2 shadow-[3px_3px_4px_0_rgba(61,83,53,0.6)] hover:bg-[#859336] hover:border-transparent hover:text-cream-50 transition-colors"
+              className="text-xs sm:text-sm font-bold bg-white text-ink-900 border border-forest-800 rounded-full px-3.5 sm:px-5 py-1.5 sm:py-2 shadow-[3px_3px_4px_0_rgba(61,83,53,0.6)] hover:bg-[#859336] hover:border-transparent hover:text-cream-50 transition-colors"
             >
               Sign up
             </button>
             <button
               type="button"
               onClick={() => setLoginOpen(true)}
-              className="text-sm font-bold bg-white text-ink-900 border border-forest-800 rounded-full px-5 py-2 shadow-[3px_3px_4px_0_rgba(61,83,53,0.6)] hover:bg-[#859336] hover:border-transparent hover:text-cream-50 transition-colors"
+              className="text-xs sm:text-sm font-bold bg-white text-ink-900 border border-forest-800 rounded-full px-3.5 sm:px-5 py-1.5 sm:py-2 shadow-[3px_3px_4px_0_rgba(61,83,53,0.6)] hover:bg-[#859336] hover:border-transparent hover:text-cream-50 transition-colors"
             >
               Log in
             </button>
@@ -153,13 +153,13 @@ export default function Landing() {
             ) : (
               <>
                 <div className="absolute inset-0 bg-gradient-to-r from-cream-50 via-cream-50/60 to-transparent" />
-                <div className="relative max-w-6xl mx-auto h-full flex items-center px-6">
+                <div className="relative max-w-[90rem] mx-auto h-full flex items-center px-6 sm:px-8 lg:px-12">
                   <div className="max-w-md">
-                    <h2 className="font-display text-4xl md:text-5xl font-bold text-forest-950 leading-tight">
+                    <h2 className="font-display text-3xl sm:text-4xl md:text-5xl font-bold text-forest-950 leading-tight">
                       {s.heading}
                     </h2>
-                    <p className="mt-5 text-forest-800 text-lg leading-relaxed">{s.body}</p>
-                    <div className="mt-8 flex gap-3">
+                    <p className="mt-5 text-forest-800 text-base sm:text-lg leading-relaxed">{s.body}</p>
+                    <div className="mt-6 sm:mt-8 flex flex-wrap gap-3">
                       <Link
                         to="/signup"
                         className="bg-forest-900 text-cream-50 font-semibold rounded-full px-6 py-3 hover:bg-forest-800 transition-colors"
@@ -213,8 +213,8 @@ export default function Landing() {
       </section>
   
       {/* Feature cards — image version */}
-      <section className="bg-[#e8e9bf] py-16">
-        <div className="max-w-6xl mx-auto px-6 grid md:grid-cols-3 gap-10">
+      <section className="bg-[#e8e9bf] py-10 sm:py-16">
+        <div className="max-w-[90rem] mx-auto px-6 sm:px-8 lg:px-12 grid sm:grid-cols-2 lg:grid-cols-3 gap-8 lg:gap-10">
           {[
             {
               image: "/feature-about.jpg",

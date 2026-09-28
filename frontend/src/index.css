@@ -40,6 +40,10 @@
 
 html {
   scroll-behavior: smooth;
+  /* Overall view scale. Tailwind sizes are rem-based, so this shrinks the whole
+     site to the compact look of the reference screenshot (16px = 100%).
+     Baguhin lang ito para lumaki/liit: 100% = dati, 80% = mas maliit. */
+  font-size: 85%;
 }
 
 body {

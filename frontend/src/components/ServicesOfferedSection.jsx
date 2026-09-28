@@ -89,7 +89,7 @@ export default function ServicesOfferedSection() {
 
   return (
     <section className="pb-4">
-      <div className="max-w-6xl mx-auto px-6 pt-12 pb-6">
+      <div className="max-w-[90rem] mx-auto px-6 sm:px-8 lg:px-12 pt-12 pb-6">
         <h2 className="font-display text-2xl md:text-3xl font-bold text-ink-900">Services Offered</h2>
       </div>
 
@@ -102,7 +102,7 @@ export default function ServicesOfferedSection() {
           onMouseMove={onMouseMove}
           onMouseUp={stopDragging}
           onMouseLeave={stopDragging}
-          className="max-w-6xl mx-auto px-6 flex gap-6 overflow-x-auto no-scrollbar cursor-grab active:cursor-grabbing"
+          className="max-w-[90rem] mx-auto px-6 sm:px-8 lg:px-12 flex gap-6 overflow-x-auto no-scrollbar cursor-grab active:cursor-grabbing"
         >
           {TRIPLED.map((service, i) => (
             <ServiceCard key={i} service={service} dark={i % SERVICES_OFFERED.length % 2 === 0} />

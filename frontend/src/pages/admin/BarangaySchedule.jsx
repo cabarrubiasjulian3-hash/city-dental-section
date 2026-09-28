@@ -130,6 +130,8 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
 
   // Filters for the Schedule table (all optional; "" = no filter).
   const [filters, setFilters] = useState(EMPTY_FILTERS);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [rotationsOpen, setRotationsOpen] = useState(false); // Weekly rotations list
   // Search box on the Priority Barangays card.
   const [prioritySearch, setPrioritySearch] = useState("");
 
@@ -308,6 +310,8 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
   }, [schedules, dentists]);
 
   const filtersActive = Object.values(filters).some(Boolean);
+  // Filters tucked inside the collapsible panel (dates stay visible in the bar).
+  const extraFilterCount = [filters.barangay, filters.activity, filters.dentist, filters.status].filter(Boolean).length;
 
   const filteredSchedules = useMemo(
     () =>
@@ -384,22 +388,37 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
       </div>
 
       {recurringRules.length > 0 && (
-        <Card>
-          <h3 className="font-display text-lg font-bold text-forest-950">Weekly rotations</h3>
-          <p className="text-xs text-forest-700 mt-0.5 mb-4">
-            Fixed dentist-per-barangay days. New dates fill in on the schedule below automatically — pause a
-            rotation instead of removing dates one by one.
-          </p>
-          <div className="space-y-2">
+        <div className="rounded-xl border border-cream-200 bg-cream-50 px-3 py-2">
+          <div className="flex items-center justify-between gap-3">
+            <p
+              className="text-sm font-semibold text-forest-950"
+              title="Fixed dentist-per-barangay days. New dates fill in on the schedule below automatically — pause a rotation instead of removing dates one by one."
+            >
+              Weekly rotations{" "}
+              <span className="font-normal text-xs text-forest-700">
+                · {recurringRules.filter((r) => r.active).length} active of {recurringRules.length}
+              </span>
+            </p>
+            <button
+              type="button"
+              onClick={() => setRotationsOpen((v) => !v)}
+              aria-expanded={rotationsOpen}
+              className="text-xs font-semibold rounded-full bg-cream-100 border border-cream-200 text-forest-900 hover:bg-cream-200 px-3 py-1"
+            >
+              {rotationsOpen ? "Hide" : "Show"} <span aria-hidden="true">{rotationsOpen ? "▴" : "▾"}</span>
+            </button>
+          </div>
+          {rotationsOpen && (
+          <div className="mt-2 grid gap-1.5 md:grid-cols-2">
             {recurringRules.map((r) => (
               <div
                 key={r.id}
-                className={`flex items-center justify-between gap-3 rounded-xl px-4 py-3 ${
+                className={`flex items-center justify-between gap-2 rounded-lg px-3 py-1.5 ${
                   r.active ? "bg-cream-100" : "bg-cream-100 opacity-50"
                 }`}
               >
                 <div className="min-w-0">
-                  <p className="font-medium text-forest-950">
+                  <p className="text-sm font-medium text-forest-950">
                     Every {DAY_NAMES[r.day_of_week]} · {r.barangay_name}
                   </p>
                   <p className="text-xs text-forest-700 truncate">
@@ -413,9 +432,9 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
                     title={r.active ? "Pause rotation" : "Resume rotation"}
                     aria-label={r.active ? "Pause rotation" : "Resume rotation"}
                     onClick={() => toggleRecurringRule(r.id, !r.active)}
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-full text-forest-800 hover:bg-cream-200"
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-full text-forest-800 hover:bg-cream-200"
                   >
-                    {r.active ? <Pause size={16} /> : <Play size={16} />}
+                    {r.active ? <Pause size={14} /> : <Play size={14} />}
                   </button>
                   {canEdit && (
                     <button
@@ -423,9 +442,9 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
                       title="Edit rotation"
                       aria-label="Edit rotation"
                       onClick={() => openEditRule(r)}
-                      className="inline-flex h-8 w-8 items-center justify-center rounded-full text-forest-800 hover:bg-cream-200"
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-full text-forest-800 hover:bg-cream-200"
                     >
-                      <Pencil size={16} />
+                      <Pencil size={14} />
                     </button>
                   )}
                   {isAdmin && (
@@ -434,16 +453,17 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
                       title="Archive rotation"
                       aria-label="Archive rotation"
                       onClick={() => removeRecurringRule(r.id)}
-                      className="inline-flex h-8 w-8 items-center justify-center rounded-full text-red-700 hover:bg-red-50"
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-full text-red-700 hover:bg-red-50"
                     >
-                      <ArchiveIcon size={16} />
+                      <ArchiveIcon size={14} />
                     </button>
                   )}
                 </div>
               </div>
             ))}
           </div>
-        </Card>
+          )}
+        </div>
       )}
 
     </div>
@@ -451,107 +471,98 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
 
       {/* Filters live OUTSIDE the read-only fieldset on purpose: doctors can't
           edit the schedule, but they can still filter it. */}
-      <Card>
-        <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
-          <div>
-            <h3 className="font-display text-base font-bold text-forest-950">Filter schedule</h3>
-            <p className="text-xs text-forest-600 mt-0.5">
-              Showing {filteredSchedules.length} of {schedules.length} scheduled date{schedules.length === 1 ? "" : "s"}
-            </p>
-          </div>
-          {filtersActive && (
-            <button
-              type="button"
-              onClick={() => setFilters(EMPTY_FILTERS)}
-              className="text-xs font-semibold rounded-full border border-forest-900 px-3.5 py-1.5 text-forest-900 hover:bg-cream-100"
-            >
-              Clear filters
-            </button>
-          )}
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-          <label className="text-xs text-forest-700">
-            From date
+      {/* Slim filter bar: dates inline, the rest tucked into a "Filters" panel. */}
+      <div className="rounded-xl border border-cream-200 bg-cream-50 px-3 py-2">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-forest-700">
+          <span className="font-semibold text-forest-950">
+            Showing {filteredSchedules.length} of {schedules.length}
+          </span>
+          <label className="flex items-center gap-1.5">
+            From
             <input
               type="date"
               value={filters.from}
               max={filters.to || undefined}
               onChange={(e) => setFilter("from", e.target.value)}
-              className="mt-1 w-full rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm text-forest-950"
+              className="rounded-lg border border-cream-200 bg-cream-100 px-2 py-1 text-xs text-forest-950"
             />
           </label>
-          <label className="text-xs text-forest-700">
-            To date
+          <label className="flex items-center gap-1.5">
+            To
             <input
               type="date"
               value={filters.to}
               min={filters.from || undefined}
               onChange={(e) => setFilter("to", e.target.value)}
-              className="mt-1 w-full rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm text-forest-950"
+              className="rounded-lg border border-cream-200 bg-cream-100 px-2 py-1 text-xs text-forest-950"
             />
           </label>
-          <label className="text-xs text-forest-700">
-            Barangay
-            <select
-              value={filters.barangay}
-              onChange={(e) => setFilter("barangay", e.target.value)}
-              className="mt-1 w-full rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm text-forest-950"
-            >
-              <option value="">All barangays</option>
-              {filterOptions.barangays.map((b) => (
-                <option key={b} value={b}>
-                  {b}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-xs text-forest-700">
-            Activity
-            <select
-              value={filters.activity}
-              onChange={(e) => setFilter("activity", e.target.value)}
-              className="mt-1 w-full rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm text-forest-950"
-            >
-              <option value="">All activities</option>
-              {filterOptions.activities.map((a) => (
-                <option key={a} value={a}>
-                  {a}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-xs text-forest-700">
-            Dentist
-            <select
-              value={filters.dentist}
-              onChange={(e) => setFilter("dentist", e.target.value)}
-              className="mt-1 w-full rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm text-forest-950"
-            >
-              <option value="">All dentists</option>
-              {filterOptions.dentists.map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-xs text-forest-700">
-            Status
-            <select
-              value={filters.status}
-              onChange={(e) => setFilter("status", e.target.value)}
-              className="mt-1 w-full rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm text-forest-950"
-            >
-              <option value="">All statuses</option>
-              {STATUS_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
+          <button
+            type="button"
+            onClick={() => setFiltersOpen((v) => !v)}
+            aria-expanded={filtersOpen}
+            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 font-semibold transition-colors ${
+              extraFilterCount ? "bg-brand-900 text-brand-50" : "bg-cream-100 border border-cream-200 text-forest-900 hover:bg-cream-200"
+            }`}
+          >
+            Filters{extraFilterCount ? ` (${extraFilterCount})` : ""} <span aria-hidden="true">{filtersOpen ? "▴" : "▾"}</span>
+          </button>
+          {filtersActive && (
+            <button type="button" onClick={() => setFilters(EMPTY_FILTERS)} className="font-semibold underline hover:text-forest-950">
+              Clear
+            </button>
+          )}
         </div>
-      </Card>
+
+        {filtersOpen && (
+          <div className="mt-2 pt-2 border-t border-cream-200 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-forest-700">
+            <label className="flex items-center gap-1.5">
+              Barangay
+              <select value={filters.barangay} onChange={(e) => setFilter("barangay", e.target.value)} className="rounded-lg border border-cream-200 bg-cream-100 px-2 py-1 text-xs text-forest-950">
+                <option value="">All</option>
+                {filterOptions.barangays.map((b) => (
+                  <option key={b} value={b}>
+                    {b}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-1.5">
+              Activity
+              <select value={filters.activity} onChange={(e) => setFilter("activity", e.target.value)} className="rounded-lg border border-cream-200 bg-cream-100 px-2 py-1 text-xs text-forest-950">
+                <option value="">All</option>
+                {filterOptions.activities.map((a) => (
+                  <option key={a} value={a}>
+                    {a}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-1.5">
+              Dentist
+              <select value={filters.dentist} onChange={(e) => setFilter("dentist", e.target.value)} className="rounded-lg border border-cream-200 bg-cream-100 px-2 py-1 text-xs text-forest-950">
+                <option value="">All</option>
+                {filterOptions.dentists.map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-1.5">
+              Status
+              <select value={filters.status} onChange={(e) => setFilter("status", e.target.value)} className="rounded-lg border border-cream-200 bg-cream-100 px-2 py-1 text-xs text-forest-950">
+                <option value="">All</option>
+                {STATUS_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        )}
+      </div>
 
     <fieldset disabled={readOnly} style={{ display: "contents" }}>
       <div className="mt-6 grid lg:grid-cols-3 gap-6 items-stretch">
@@ -637,9 +648,9 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
                                 title="Edit schedule entry"
                                 aria-label="Edit schedule entry"
                                 onClick={() => openEditSchedule(s)}
-                                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-forest-800 hover:bg-cream-200"
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-full text-forest-800 hover:bg-cream-200"
                               >
-                                <Pencil size={16} />
+                                <Pencil size={14} />
                               </button>
                               {isAdmin && (
                                 <button
@@ -647,9 +658,9 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
                                   title="Archive schedule entry"
                                   aria-label="Archive schedule entry"
                                   onClick={() => removeSchedule(s.id)}
-                                  className="inline-flex h-8 w-8 items-center justify-center rounded-full text-red-700 hover:bg-red-50"
+                                  className="inline-flex h-7 w-7 items-center justify-center rounded-full text-red-700 hover:bg-red-50"
                                 >
-                                  <ArchiveIcon size={16} />
+                                  <ArchiveIcon size={14} />
                                 </button>
                               )}
                             </div>

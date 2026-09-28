@@ -146,8 +146,8 @@ export default function AdminUserManagement() {
         <p className="text-sm text-forest-700 mt-1">
           See the doctors and patients who made an account — including patients who signed up but have no records yet —
           and archive accounts that shouldn't be here. Approve or reject doctor sign-ups in{" "}
-          <Link to="/admin/doctor-access" className="underline font-semibold">
-            Doctor Access
+          <Link to="/admin/staff#doctor-access" className="underline font-semibold">
+            Staff Management → Doctor Access
           </Link>
           .
         </p>

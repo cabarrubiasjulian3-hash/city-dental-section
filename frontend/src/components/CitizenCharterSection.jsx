@@ -137,7 +137,7 @@ function ServicePanel({ service }) {
   return (
     <div className="bg-cream-50 border border-cream-200 rounded-b-3xl rounded-tr-3xl p-6 md:p-8">
       {/* About / Venue / Client */}
-      <div className="grid md:grid-cols-3 gap-4 mb-8">
+      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
         <InfoCard icon={WrenchIcon} title="ABOUT THE SERVICE">
           {service.aboutService}
         </InfoCard>
@@ -150,7 +150,7 @@ function ServicePanel({ service }) {
       </div>
 
       {/* Documents / Availability / Fees */}
-      <div className="grid md:grid-cols-3 gap-6 mb-8">
+      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
         <ChecklistColumn heading="DOCUMENTS NEEDED">
           {service.documentsNeeded.map((doc) => (
             <ChecklistRow key={doc} icon={DOC_ICONS[doc] || ClipboardIcon}>
@@ -229,7 +229,7 @@ export default function CitizenCharterSection() {
   const [activeIndex, setActiveIndex] = useState(0);
 
   return (
-    <section className="max-w-6xl mx-auto px-6 pb-20">
+    <section className="max-w-[90rem] mx-auto px-6 sm:px-8 lg:px-12 pb-20">
       <div className="text-center mb-8">
         <h2 className="font-display text-2xl md:text-3xl font-bold text-forest-950">Our Services</h2>
         <p className="text-forest-700 mt-2">Citizen's Charter — what to expect for each dental service</p>
