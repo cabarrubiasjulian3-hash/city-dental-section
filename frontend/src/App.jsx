@@ -36,7 +36,7 @@ import AdminArchive from "./pages/admin/Archive";
 const patientNav = [
   { to: "/patient", end: true, icon: <IconDashboard />, label: "Dashboard" },
   { to: "/patient/profile", icon: <IconUsers />, label: "My Profile" },
-  { to: "/patient/barangay-appointments", icon: <IconCalendar />, label: "Barangay Appointments" },
+  { to: "/patient/barangay-schedule", icon: <IconCalendar />, label: "Barangay Schedule" },
   { to: "/patient/dental-record", icon: <IconReport />, label: "Dental Record" },
   { to: "/patient/messages", icon: <MessageSquare size={18} />, label: "Messages" },
   { to: "/patient/support", icon: <IconChat />, label: "Support" },
@@ -88,10 +88,14 @@ export default function App() {
           >
             <Route index element={<PatientDashboard />} />
             <Route path="profile" element={<PatientProfile />} />
-            <Route path="barangay-appointments" element={<PatientBarangaySchedule />} />
+            <Route path="barangay-schedule" element={<PatientBarangaySchedule />} />
             <Route path="dental-record" element={<PatientDentalRecord />} />
             <Route path="messages" element={<PatientMessages />} />
             <Route path="support" element={<PatientSupport />} />
+            {/* Catch-all: any unknown sub-path here (an old renamed page, a
+                stale bookmark, a typo) lands on the dashboard instead of a
+                blank "no route matched" page. Keep this LAST in the list. */}
+            <Route path="*" element={<Navigate to="/patient" replace />} />
           </Route>
 
           <Route
@@ -111,6 +115,10 @@ export default function App() {
             {/* Old "Doctor Access" page — merged into the Staff Management page. */}
             <Route path="doctor-access" element={<Navigate to="/admin/staff#doctor-access" replace />} />
             <Route path="archive" element={<AdminArchive />} />
+            {/* Catch-all: any unknown sub-path here (an old renamed page, a
+                stale bookmark, a typo) lands on the dashboard instead of a
+                blank "no route matched" page. Keep this LAST in the list. */}
+            <Route path="*" element={<Navigate to="/admin" replace />} />
           </Route>
 
           {/* Doctor Portal — same page components as Admin. Most stay
@@ -134,6 +142,10 @@ export default function App() {
             <Route path="patients" element={<AdminPatients readOnly />} />
             <Route path="barangay-schedule" element={<AdminBarangaySchedule />} />
             <Route path="messages" element={<AdminMessages />} />
+            {/* Catch-all: any unknown sub-path here (an old renamed page, a
+                stale bookmark, a typo) lands on the dashboard instead of a
+                blank "no route matched" page. Keep this LAST in the list. */}
+            <Route path="*" element={<Navigate to="/doctor" replace />} />
           </Route>
         </Routes>
       </AuthProvider>

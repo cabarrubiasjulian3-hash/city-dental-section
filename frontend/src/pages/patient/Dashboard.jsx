@@ -107,7 +107,7 @@ export default function PatientDashboard() {
           )}
         </Card>
 
-        <Card title="Next Barangay Dental Mission" action={<Link to="/patient/barangay-appointments" className="text-xs underline">See more</Link>}>
+        <Card title="Next Barangay Dental Mission" action={<Link to="/patient/barangay-schedule" className="text-xs underline">See more</Link>}>
           {nextSchedule ? (
             <div>
               <p className="font-display font-semibold text-lg text-forest-950">{nextSchedule.barangay_name}</p>

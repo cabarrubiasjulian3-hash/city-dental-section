@@ -89,7 +89,7 @@ const RULES = [
     reply: {
       text:
         "Makikita po ninyo sa Barangay Appointments kung anong barangay ang pupuntahan ng aming dental team at kailan.",
-      link: { label: "Buksan ang Barangay Appointments", to: "/patient/barangay-appointments" },
+      link: { label: "Buksan ang Barangay Schedule", to: "/patient/barangay-schedule" },
     },
   },
   {
@@ -98,7 +98,7 @@ const RULES = [
       text:
         `Bukas po ang City Dental Section tuwing ${CLINIC_HOURS}.\n\n` +
         "Para sa schedule ng pagbisita namin sa mga barangay, tingnan po ang Barangay Appointments.",
-      link: { label: "Buksan ang Barangay Appointments", to: "/patient/barangay-appointments" },
+      link: { label: "Buksan ang Barangay Schedule", to: "/patient/barangay-schedule" },
     },
   },
   {
