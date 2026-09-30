@@ -25,15 +25,16 @@ app.use(express.json());
 // Logs what doctors change (patient records, barangay schedule) for the notification bell.
 app.use("/api", auditDoctorChanges);
 
-// Barangay schedule entries whose date has passed flip to "Completed" on their
-// own (see lib/scheduleStatus.js): before each request (throttled), at
-// startup, and hourly for a server that sits idle overnight.
+// Barangay schedule entries flip to "Completed" on their own once their date
+// has passed, or once the end of today's time range (e.g. 5:00 PM) has passed
+// (see lib/scheduleStatus.js): before each request (throttled), at startup,
+// and every minute for a server that sits idle.
 app.use("/api", (req, res, next) => {
   autoCompletePastSchedules();
   next();
 });
 autoCompletePastSchedules({ force: true });
-setInterval(() => autoCompletePastSchedules({ force: true }), 60 * 60 * 1000).unref();
+setInterval(() => autoCompletePastSchedules({ force: true }), 60 * 1000).unref();
 
 app.get("/api/health", (req, res) => res.json({ ok: true, service: "city-dental-section-api" }));
 

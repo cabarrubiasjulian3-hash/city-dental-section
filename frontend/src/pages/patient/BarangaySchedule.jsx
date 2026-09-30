@@ -3,6 +3,7 @@ import { Search, MapPin, Clock, Stethoscope } from "lucide-react";
 import { api } from "../../lib/api";
 import { Card, EmptyState } from "../../components/ui";
 import Modal from "../../components/Modal";
+import { effectiveStatus, manilaToday, manilaMinutes } from "../../lib/scheduleStatus";
 
 function formatShortDate(dateStr) {
   const d = new Date(dateStr + "T00:00:00");
@@ -21,18 +22,10 @@ function boxLabel(s) {
   return "Barangay Visit";
 }
 
-// The visible status is mostly automatic, based on the visit date vs today —
-// mirrors the same rule the Admin/Doctor Barangay Schedule uses, so a
+// The visible status is automatic (date + end of the time range, see
+// lib/scheduleStatus.js) — the same rule the Admin/Doctor Barangay Schedule uses, so a
 // patient sees the same status they would. "Completed" and "Not Completed"
 // visits are past, and patients don't need to see those here.
-function effectiveStatus(s, todayStr) {
-  if (s.status === "Not Completed") return "Not Completed";
-  if (!s.visit_date) return s.status || "Upcoming";
-  if (s.visit_date === todayStr) return "Ongoing";
-  if (s.visit_date < todayStr) return "Completed";
-  return s.status || "Upcoming";
-}
-
 const STATUS_STYLES = {
   Ongoing: "bg-green-100 text-green-800 border border-green-300",
   Upcoming: "bg-red-100 text-red-700 border border-red-300",
@@ -77,15 +70,23 @@ export default function PatientBarangaySchedule() {
       .finally(() => setLoading(false));
   }, []);
 
-  const today = new Date().toISOString().slice(0, 10);
+  const [today, setToday] = useState(manilaToday);
+  const [nowMin, setNowMin] = useState(manilaMinutes);
+  useEffect(() => {
+    const id = setInterval(() => {
+      setToday(manilaToday());
+      setNowMin(manilaMinutes());
+    }, 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
 
   // Only what's actually upcoming or happening today — no past schedule here.
   const active = useMemo(() => {
     return schedules
-      .map((s) => ({ s, status: effectiveStatus(s, today) }))
+      .map((s) => ({ s, status: effectiveStatus(s, today, nowMin) }))
       .filter(({ status }) => status === "Upcoming" || status === "Ongoing")
       .sort((a, b) => a.s.visit_date.localeCompare(b.s.visit_date));
-  }, [schedules, today]);
+  }, [schedules, today, nowMin]);
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();

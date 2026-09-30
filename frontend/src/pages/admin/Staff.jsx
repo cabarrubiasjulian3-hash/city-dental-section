@@ -192,7 +192,10 @@ function StaffDirectory() {
                   </tr>
                 ) : (
                   <tr key={s.id} className="border-t border-cream-200">
-                    <td className="py-3 font-medium">{s.name}</td>
+                    <td className="py-3">
+                      <p className="font-medium">{s.name}</p>
+                      <p className="text-xs text-forest-500">ST-{String(s.id).padStart(4, "0")}</p>
+                    </td>
                     <td className="py-3">{s.role}</td>
                     <td className="py-3 text-forest-700">
                       {s.email || s.phone ? (
@@ -316,7 +319,10 @@ function DoctorAccessPanel({ doctors, codes, reload }) {
             <tbody>
               {pendingDoctors.map((d) => (
                 <tr key={d.id} className="border-t border-cream-200">
-                  <td className="py-3 font-medium">{d.name}</td>
+                  <td className="py-3">
+                    <p className="font-medium">{d.name}</p>
+                    <p className="text-xs text-forest-500">TC-{String(d.id).padStart(4, "0")}</p>
+                  </td>
                   <td className="py-3 text-forest-700">{d.email}</td>
                   <td className="py-3 text-forest-700 font-mono text-xs">{d.doctor_access_code}</td>
                   <td className="py-3 text-right whitespace-nowrap">
@@ -414,7 +420,10 @@ function DoctorAccessPanel({ doctors, codes, reload }) {
             <tbody>
               {reviewedDoctors.map((d) => (
                 <tr key={d.id} className="border-t border-cream-200">
-                  <td className="py-3 font-medium">{d.name}</td>
+                  <td className="py-3">
+                    <p className="font-medium">{d.name}</p>
+                    <p className="text-xs text-forest-500">TC-{String(d.id).padStart(4, "0")}</p>
+                  </td>
                   <td className="py-3 text-forest-700">{d.email}</td>
                   <td className="py-3">
                     <StatusPill status={d.doctor_status} />

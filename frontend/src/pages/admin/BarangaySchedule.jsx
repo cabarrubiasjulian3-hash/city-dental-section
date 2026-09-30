@@ -8,6 +8,7 @@ import EditedBy from "../../components/EditedBy";
 import Modal from "../../components/Modal";
 import { IconCalendar } from "../../components/icons";
 import { TAYABAS_BARANGAYS } from "../../lib/barangays";
+import { effectiveStatus, manilaToday, manilaMinutes } from "../../lib/scheduleStatus";
 
 const STATUS_OPTIONS = [
   { value: "Upcoming", label: "Upcoming" },
@@ -16,18 +17,10 @@ const STATUS_OPTIONS = [
   { value: "Not Completed", label: "Not Completed" },
 ];
 
-// The visible status is mostly automatic, based on the visit date vs today —
-// staff only ever need to set one thing by hand: flip it to "Not Completed"
-// when a day has passed but the visit didn't actually happen. That flag
-// always wins; otherwise Completed/Ongoing/Upcoming follow the date.
-function effectiveStatus(s, todayStr) {
-  if (s.status === "Not Completed") return "Not Completed";
-  if (!s.visit_date) return s.status || "Upcoming";
-  if (s.visit_date === todayStr) return "Ongoing";
-  if (s.visit_date < todayStr) return "Completed";
-  return s.status || "Upcoming";
-}
-
+// The visible status is automatic (see lib/scheduleStatus.js): it follows the
+// visit date and, on the day itself, the end of the time range — staff only
+// ever need to set one thing by hand: flip it to "Not Completed" when the
+// visit didn't actually happen. That flag always wins.
 // Same four statuses as the table Badge, just as flat classes for the small
 // calendar-day pills (no shared component since these need tighter padding).
 const CALENDAR_PILL_STYLES = {
@@ -152,7 +145,17 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
 
   // Filters for the Schedule table (all optional; "" = no filter).
   const [filters, setFilters] = useState(EMPTY_FILTERS);
-  const todayStr = new Date().toISOString().slice(0, 10); // stays fixed for the life of this page load
+  // Clinic (Philippine) date + time; re-checked every minute so a visit flips to
+  // Completed at the end of its time range without needing a page refresh.
+  const [todayStr, setTodayStr] = useState(manilaToday);
+  const [nowMin, setNowMin] = useState(manilaMinutes);
+  useEffect(() => {
+    const id = setInterval(() => {
+      setTodayStr(manilaToday());
+      setNowMin(manilaMinutes());
+    }, 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
   const [filtersOpen, setFiltersOpen] = useState(false);
   // List / Calendar toggle for the Schedule card. The calendar keeps its own
   // displayed month (independent of the From/To filters) so browsing months
@@ -343,11 +346,11 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
     }
   }
 
-  const upcomingCount = useMemo(() => schedules.filter((s) => effectiveStatus(s, todayStr) === "Upcoming").length, [schedules, todayStr]);
+  const upcomingCount = useMemo(() => schedules.filter((s) => effectiveStatus(s, todayStr, nowMin) === "Upcoming").length, [schedules, todayStr, nowMin]);
 
   const completedThisMonthCount = useMemo(() => {
     const thisMonth = new Date().toISOString().slice(0, 7);
-    return schedules.filter((s) => effectiveStatus(s, todayStr) === "Completed" && s.visit_date?.slice(0, 7) === thisMonth).length;
+    return schedules.filter((s) => effectiveStatus(s, todayStr, nowMin) === "Completed" && s.visit_date?.slice(0, 7) === thisMonth).length;
   }, [schedules]);
 
   // Dropdown choices for the filters: whatever is actually on the schedule,
@@ -379,19 +382,19 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
           if (filters.barangay && s.barangay_name !== filters.barangay) return false;
           if (filters.activity && s.services !== filters.activity) return false;
           if (filters.dentist && s.dentist !== filters.dentist) return false;
-          if (filters.status && effectiveStatus(s, todayStr) !== filters.status) return false;
+          if (filters.status && effectiveStatus(s, todayStr, nowMin) !== filters.status) return false;
           return true;
         })
         .sort((a, b) => {
-          const aStatus = effectiveStatus(a, todayStr);
-          const bStatus = effectiveStatus(b, todayStr);
+          const aStatus = effectiveStatus(a, todayStr, nowMin);
+          const bStatus = effectiveStatus(b, todayStr, nowMin);
           const rankDiff = (STATUS_RANK[aStatus] ?? 0) - (STATUS_RANK[bStatus] ?? 0);
           if (rankDiff !== 0) return rankDiff;
           const dateDiff = (a.visit_date || "").localeCompare(b.visit_date || "");
           // Same tier: Upcoming/Ongoing soonest-first, Completed/Not Completed most-recent-first.
           return aStatus === "Upcoming" || aStatus === "Ongoing" ? dateDiff : -dateDiff;
         }),
-    [schedules, filters]
+    [schedules, filters, todayStr, nowMin]
   );
 
   // Builds one grid of Sun–Sat weeks for the displayed month, each day
@@ -722,10 +725,11 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
                 <thead>
                   <tr className="text-left text-forest-700 uppercase text-xs">
                     <th className="py-2 pr-2">Date</th>
+                    <th className="py-2 pr-2">Time</th>
                     <th className="py-2 pr-2">Barangay</th>
                     <th className="py-2 pr-2">Activity</th>
                     <th className="py-2 pr-2">Dentist</th>
-                    <th className="py-2 pr-2 text-right">Target</th>
+                    <th className="py-2 pr-8 text-right">Target</th>
                     <th className="py-2 pr-2">Status</th>
                     <th className="py-2"></th>
                   </tr>
@@ -742,6 +746,13 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
                             onSave={(v) => updateSchedule(s.id, "visit_date", v)}
                           />
                           <p className="text-xs text-forest-500 pl-2">{day.bottom}</p>
+                        </td>
+                        <td className="py-2 pr-2 text-forest-700 whitespace-nowrap">
+                          <EditableCell
+                            value={s.time_range}
+                            placeholder="8:00 AM - 5:00 PM"
+                            onSave={(v) => updateSchedule(s.id, "time_range", v)}
+                          />
                         </td>
                         <td className="py-2 pr-2 font-medium">
                           <EditableCell
@@ -769,7 +780,7 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
                             onSave={(v) => updateSchedule(s.id, "dentist", v)}
                           />
                         </td>
-                        <td className="py-2 pr-2 text-right">
+                        <td className="py-2 pr-8 text-right">
                           <EditableCell
                             type="number"
                             value={s.target ?? ""}
@@ -782,7 +793,7 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
                           <EditableCell
                             type="select"
                             options={STATUS_OPTIONS}
-                            value={effectiveStatus(s, todayStr)}
+                            value={effectiveStatus(s, todayStr, nowMin)}
                             renderDisplay={(v) => <Badge status={v} />}
                             onSave={(v) => updateSchedule(s.id, "status", v)}
                           />
@@ -872,9 +883,9 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
                               key={s.id}
                               type="button"
                               onClick={() => canEdit && openEditSchedule(s)}
-                              title={`${s.barangay_name} — ${s.services || "No details"} — ${effectiveStatus(s, todayStr)}`}
+                              title={`${s.barangay_name} — ${s.services || "No details"} — ${effectiveStatus(s, todayStr, nowMin)}`}
                               className={`flex-1 min-h-[1.25rem] w-full flex items-center justify-center text-center rounded-md px-1 py-1 text-[10px] font-bold leading-tight ${
-                                CALENDAR_PILL_STYLES[effectiveStatus(s, todayStr)] ?? CALENDAR_PILL_STYLES.Upcoming
+                                CALENDAR_PILL_STYLES[effectiveStatus(s, todayStr, nowMin)] ?? CALENDAR_PILL_STYLES.Upcoming
                               } ${canEdit ? "hover:opacity-80 cursor-pointer" : "cursor-default"}`}
                             >
                               <span className="truncate">{s.barangay_name}</span>

@@ -120,7 +120,7 @@ export default function AdminUserManagement() {
     return users.filter((u) => {
       if (group !== "all" && groupOf(u) !== group) return false;
       if (!q) return true;
-      return [u.name, u.email, u.barangay, u.role].some((v) => String(v || "").toLowerCase().includes(q));
+      return [u.name, u.email, u.barangay, u.role, `TC-${String(u.id).padStart(4, "0")}`, String(u.id)].some((v) => String(v || "").toLowerCase().includes(q));
     });
   }, [users, group, search]);
 
@@ -188,7 +188,7 @@ export default function AdminUserManagement() {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search name, email or barangay…"
+            placeholder="Search name, ID, email or barangay…"
             className="rounded-full border border-cream-200 bg-cream-100 px-4 py-2 text-sm outline-none focus:border-forest-700 w-full sm:w-72"
           />
         </div>
@@ -216,6 +216,7 @@ export default function AdminUserManagement() {
                       <tr key={u.id} className="border-t border-cream-200 align-top">
                         <td className="py-3 pr-3">
                           <p className="font-medium text-forest-950">{u.name}</p>
+                          <p className="text-xs text-forest-500">TC-{String(u.id).padStart(4, "0")}</p>
                           {u.barangay && <p className="text-xs text-forest-600 mt-0.5">Brgy. {u.barangay}</p>}
                         </td>
                         <td className="py-3 pr-3 text-forest-700 break-all">{u.email}</td>
