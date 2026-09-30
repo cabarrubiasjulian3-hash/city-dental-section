@@ -6,6 +6,29 @@ import { Card, EmptyState } from "../../components/ui";
 import Modal from "../../components/Modal";
 import ToothChart from "../../components/ToothChart";
 
+// A Notes value shown as a button (like the admin side's Notes button).
+// Clicking it pops up the full notes text — view only, nothing to type or
+// save here. Closes with the × in the corner, by clicking outside it, or
+// with Escape.
+function NotesViewButton({ notes, title, onOpenChange }) {
+  const hasNotes = !!(notes && String(notes).trim());
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation(); // don't also trigger the row's "open record" click
+        onOpenChange({ notes, title });
+      }}
+      title={hasNotes ? "View notes" : "No notes"}
+      className={`inline-flex max-w-[220px] items-center rounded-full border border-cream-200 bg-cream-50 px-3 py-1 text-left text-sm italic hover:bg-cream-200 focus:outline-none focus:ring-2 focus:ring-forest-500 ${
+        hasNotes ? "text-forest-950" : "text-forest-500"
+      }`}
+    >
+      <span className="truncate">{hasNotes ? notes : "No notes"}</span>
+    </button>
+  );
+}
+
 // View-only. Patients can open any treatment record to see its details and
 // their tooth chart, but nothing here can be changed: the tooth chart is
 // rendered with isAdmin={false} (no click-to-edit), and the server's
@@ -17,6 +40,9 @@ export default function PatientDentalRecord() {
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
+  // The record whose notes are currently shown in the view-only Notes popup
+  // ({ notes, title }), or null when it's closed.
+  const [notesPopup, setNotesPopup] = useState(null);
 
   useEffect(() => {
     api
@@ -67,7 +93,9 @@ export default function PatientDentalRecord() {
                   <td className="py-3">{r.record_date}</td>
                   <td className="py-3 font-medium text-forest-900 underline decoration-dotted">{r.procedure}</td>
                   <td className="py-3">{r.dentist || "—"}</td>
-                  <td className="py-3 text-forest-700">{r.notes || "—"}</td>
+                  <td className="py-3 text-forest-700">
+                    <NotesViewButton notes={r.notes} title={`${r.procedure} · ${r.record_date}`} onOpenChange={setNotesPopup} />
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -104,13 +132,33 @@ export default function PatientDentalRecord() {
               </div>
               <div>
                 <p className="text-xs uppercase tracking-wide font-semibold text-forest-700">Notes</p>
-                <p className="mt-1 text-forest-950 whitespace-pre-line">{selected.notes || "—"}</p>
+                <div className="mt-1">
+                  <NotesViewButton
+                    notes={selected.notes}
+                    title={`${selected.procedure} · ${selected.record_date}`}
+                    onOpenChange={setNotesPopup}
+                  />
+                </div>
               </div>
             </div>
 
             <ToothChart patientId={user.id} isAdmin={false} />
             <p className="text-xs text-forest-600 text-center mt-2">
               This is your current tooth chart on file with the clinic.
+            </p>
+          </div>
+        )}
+      </Modal>
+
+      {/* View-only Notes popup — opened from either the table's Notes button
+          or the record detail's Notes button. Nothing here is editable. */}
+      <Modal isOpen={!!notesPopup} onClose={() => setNotesPopup(null)} size="md">
+        {notesPopup && (
+          <div>
+            <h3 className="font-display text-lg font-bold text-forest-950 pr-8">Notes</h3>
+            {notesPopup.title && <p className="mt-0.5 text-sm text-forest-500">{notesPopup.title}</p>}
+            <p className="mt-4 whitespace-pre-line text-sm text-forest-950">
+              {notesPopup.notes && String(notesPopup.notes).trim() ? notesPopup.notes : "No notes for this visit."}
             </p>
           </div>
         )}

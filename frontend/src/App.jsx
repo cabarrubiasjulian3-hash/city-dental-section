@@ -22,7 +22,6 @@ import PatientProfile from "./pages/patient/Profile";
 import PatientBarangaySchedule from "./pages/patient/BarangaySchedule";
 import PatientDentalRecord from "./pages/patient/DentalRecord";
 import PatientMessages from "./pages/patient/Messages";
-import PatientSupport from "./pages/patient/Support";
 
 import AdminDashboard from "./pages/admin/Dashboard";
 import AdminPatients from "./pages/admin/Patients";
@@ -39,7 +38,6 @@ const patientNav = [
   { to: "/patient/barangay-schedule", icon: <IconCalendar />, label: "Barangay Schedule" },
   { to: "/patient/dental-record", icon: <IconReport />, label: "Dental Record" },
   { to: "/patient/messages", icon: <MessageSquare size={18} />, label: "Messages" },
-  { to: "/patient/support", icon: <IconChat />, label: "Support" },
 ];
 
 const adminNav = [
@@ -91,7 +89,6 @@ export default function App() {
             <Route path="barangay-schedule" element={<PatientBarangaySchedule />} />
             <Route path="dental-record" element={<PatientDentalRecord />} />
             <Route path="messages" element={<PatientMessages />} />
-            <Route path="support" element={<PatientSupport />} />
             {/* Catch-all: any unknown sub-path here (an old renamed page, a
                 stale bookmark, a typo) lands on the dashboard instead of a
                 blank "no route matched" page. Keep this LAST in the list. */}
