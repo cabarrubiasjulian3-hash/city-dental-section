@@ -44,6 +44,7 @@ const BADGE_STYLES = {
   Upcoming: "bg-cream-200 text-forest-800",
   Ongoing: "bg-clay-500 text-white",
   Completed: "bg-leaf-300 text-forest-900",
+  "Not Completed": "bg-red-100 text-red-800",
 };
 
 export function Badge({ status }) {

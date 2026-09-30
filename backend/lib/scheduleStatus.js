@@ -7,6 +7,10 @@ import db from "../db.js";
 // the server's, so a server running in UTC doesn't flip entries 8 hours early
 // or late.
 //
+// "Not Completed" is a deliberate, staff-set flag ("this date passed but the
+// visit didn't happen") and must never be auto-flipped back to "Completed" —
+// hence excluding it below, not just excluding "Completed" itself.
+//
 // This runs (throttled to once a minute) before every API request, at server
 // start, and hourly — so the schedule pages, the patient portal, the
 // Dashboard and the Monthly Report (which counts Completed community
@@ -16,7 +20,7 @@ export function todayInManila() {
 }
 
 const completePast = db.prepare(
-  "UPDATE barangay_schedule SET status = 'Completed' WHERE substr(visit_date, 1, 10) < ? AND status != 'Completed'"
+  "UPDATE barangay_schedule SET status = 'Completed' WHERE substr(visit_date, 1, 10) < ? AND status NOT IN ('Completed', 'Not Completed')"
 );
 
 let lastRun = 0;

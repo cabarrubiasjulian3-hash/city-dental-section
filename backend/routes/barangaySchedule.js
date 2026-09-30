@@ -65,7 +65,7 @@ router.get("/", (req, res) => {
   res.json(rows);
 });
 
-const STATUS_VALUES = ["Upcoming", "Ongoing", "Completed"];
+const STATUS_VALUES = ["Upcoming", "Ongoing", "Completed", "Not Completed"];
 
 // Admin or doctor: post a new barangay mission date
 router.post("/", requireRole("admin", "doctor"), (req, res) => {

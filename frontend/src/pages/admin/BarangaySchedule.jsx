@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Pencil, Archive as ArchiveIcon, Pause, Play } from "lucide-react";
+import { Pencil, Archive as ArchiveIcon, Pause, Play, List, CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
 import { api } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
 import { Card, StatCard, Badge, EmptyState } from "../../components/ui";
@@ -13,7 +13,29 @@ const STATUS_OPTIONS = [
   { value: "Upcoming", label: "Upcoming" },
   { value: "Ongoing", label: "Ongoing" },
   { value: "Completed", label: "Completed" },
+  { value: "Not Completed", label: "Not Completed" },
 ];
+
+// The visible status is mostly automatic, based on the visit date vs today —
+// staff only ever need to set one thing by hand: flip it to "Not Completed"
+// when a day has passed but the visit didn't actually happen. That flag
+// always wins; otherwise Completed/Ongoing/Upcoming follow the date.
+function effectiveStatus(s, todayStr) {
+  if (s.status === "Not Completed") return "Not Completed";
+  if (!s.visit_date) return s.status || "Upcoming";
+  if (s.visit_date === todayStr) return "Ongoing";
+  if (s.visit_date < todayStr) return "Completed";
+  return s.status || "Upcoming";
+}
+
+// Same four statuses as the table Badge, just as flat classes for the small
+// calendar-day pills (no shared component since these need tighter padding).
+const CALENDAR_PILL_STYLES = {
+  Upcoming: "bg-cream-200 text-forest-800",
+  Ongoing: "bg-clay-500 text-white",
+  Completed: "bg-leaf-300 text-forest-900",
+  "Not Completed": "bg-red-100 text-red-800",
+};
 
 const BARANGAY_OPTIONS = TAYABAS_BARANGAYS.map((name) => ({ value: name, label: name }));
 
@@ -130,7 +152,31 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
 
   // Filters for the Schedule table (all optional; "" = no filter).
   const [filters, setFilters] = useState(EMPTY_FILTERS);
+  const todayStr = new Date().toISOString().slice(0, 10); // stays fixed for the life of this page load
   const [filtersOpen, setFiltersOpen] = useState(false);
+  // List / Calendar toggle for the Schedule card. The calendar keeps its own
+  // displayed month (independent of the From/To filters) so browsing months
+  // doesn't fight with a date-range filter someone may have set.
+  const [view, setView] = useState("list");
+  const [calendarMonth, setCalendarMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  function shiftMonth(delta) {
+    const [y, m] = calendarMonth.split("-").map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    setCalendarMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  }
+
+  // Left/Right arrow keys move a month at a time while the calendar is open —
+  // standard in most task/date calendars (Google Calendar, Outlook, etc).
+  useEffect(() => {
+    if (view !== "calendar") return;
+    function onKey(e) {
+      if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.target.tagName === "TEXTAREA") return;
+      if (e.key === "ArrowLeft") shiftMonth(-1);
+      if (e.key === "ArrowRight") shiftMonth(1);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [view, calendarMonth]); // eslint-disable-line react-hooks/exhaustive-deps
   const [rotationsOpen, setRotationsOpen] = useState(false); // Weekly rotations list
   // Search box on the Priority Barangays card.
   const [prioritySearch, setPrioritySearch] = useState("");
@@ -208,8 +254,16 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
   }
 
   async function updateSchedule(id, field, value) {
-    await api.patch(`/barangay-schedule/${id}`, { [field]: value });
-    load();
+    setActionError("");
+    try {
+      await api.patch(`/barangay-schedule/${id}`, { [field]: value });
+      load();
+    } catch (err) {
+      // Surface it instead of failing silently — otherwise a rejected save
+      // (e.g. the field reverting) looks like the row vanished.
+      setActionError(err.message || "Could not save that change.");
+      throw err;
+    }
   }
 
   async function removeSchedule(id) {
@@ -289,11 +343,11 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
     }
   }
 
-  const upcomingCount = useMemo(() => schedules.filter((s) => s.status === "Upcoming").length, [schedules]);
+  const upcomingCount = useMemo(() => schedules.filter((s) => effectiveStatus(s, todayStr) === "Upcoming").length, [schedules, todayStr]);
 
   const completedThisMonthCount = useMemo(() => {
     const thisMonth = new Date().toISOString().slice(0, 7);
-    return schedules.filter((s) => s.status === "Completed" && s.visit_date?.slice(0, 7) === thisMonth).length;
+    return schedules.filter((s) => effectiveStatus(s, todayStr) === "Completed" && s.visit_date?.slice(0, 7) === thisMonth).length;
   }, [schedules]);
 
   // Dropdown choices for the filters: whatever is actually on the schedule,
@@ -313,20 +367,59 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
   // Filters tucked inside the collapsible panel (dates stay visible in the bar).
   const extraFilterCount = [filters.barangay, filters.activity, filters.dentist, filters.status].filter(Boolean).length;
 
+  // Upcoming/Ongoing first (soonest date first), Completed last (most recently
+  // completed first) — so what still needs doing stays at the top of the list.
+  const STATUS_RANK = { Ongoing: 0, Upcoming: 0, Completed: 1, "Not Completed": 1 };
   const filteredSchedules = useMemo(
     () =>
-      schedules.filter((s) => {
-        if (filters.from && (s.visit_date || "") < filters.from) return false;
-        if (filters.to && (s.visit_date || "") > filters.to) return false;
-        if (filters.barangay && s.barangay_name !== filters.barangay) return false;
-        if (filters.activity && s.services !== filters.activity) return false;
-        if (filters.dentist && s.dentist !== filters.dentist) return false;
-        if (filters.status && s.status !== filters.status) return false;
-        return true;
-      }),
+      schedules
+        .filter((s) => {
+          if (filters.from && (s.visit_date || "") < filters.from) return false;
+          if (filters.to && (s.visit_date || "") > filters.to) return false;
+          if (filters.barangay && s.barangay_name !== filters.barangay) return false;
+          if (filters.activity && s.services !== filters.activity) return false;
+          if (filters.dentist && s.dentist !== filters.dentist) return false;
+          if (filters.status && effectiveStatus(s, todayStr) !== filters.status) return false;
+          return true;
+        })
+        .sort((a, b) => {
+          const aStatus = effectiveStatus(a, todayStr);
+          const bStatus = effectiveStatus(b, todayStr);
+          const rankDiff = (STATUS_RANK[aStatus] ?? 0) - (STATUS_RANK[bStatus] ?? 0);
+          if (rankDiff !== 0) return rankDiff;
+          const dateDiff = (a.visit_date || "").localeCompare(b.visit_date || "");
+          // Same tier: Upcoming/Ongoing soonest-first, Completed/Not Completed most-recent-first.
+          return aStatus === "Upcoming" || aStatus === "Ongoing" ? dateDiff : -dateDiff;
+        }),
     [schedules, filters]
   );
 
+  // Builds one grid of Sun–Sat weeks for the displayed month, each day
+  // carrying whichever filtered schedule entries fall on that date.
+  const calendarWeeks = useMemo(() => {
+    const [y, m] = calendarMonth.split("-").map(Number);
+    const byDate = new Map();
+    for (const s of filteredSchedules) {
+      if (!s.visit_date) continue;
+      if (!byDate.has(s.visit_date)) byDate.set(s.visit_date, []);
+      byDate.get(s.visit_date).push(s);
+    }
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const startWeekday = new Date(y, m - 1, 1).getDay();
+    const cells = Array(startWeekday).fill(null);
+    for (let d = 1; d <= daysInMonth; d++) {
+      const date = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      cells.push({ date, day: d, items: byDate.get(date) || [] });
+    }
+    while (cells.length % 7 !== 0) cells.push(null);
+    const weeks = [];
+    for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+    return weeks;
+  }, [calendarMonth, filteredSchedules]);
+  const calendarMonthLabel = new Date(`${calendarMonth}-01T00:00:00`).toLocaleDateString("en-US", {
+    month: "long",
+    year: "numeric",
+  });
   function setFilter(field, value) {
     setFilters((f) => ({ ...f, [field]: value }));
   }
@@ -568,9 +661,63 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
       <div className="mt-6 grid lg:grid-cols-3 gap-6 items-stretch">
         <div className="lg:col-span-2">
           <Card>
-            <h3 className="font-display text-lg font-bold text-forest-950">Schedule</h3>
-            <p className="text-xs text-forest-700 mt-0.5 mb-4">{monthRangeLabel(schedules)}</p>
-            {filteredSchedules.length ? (
+            <div className="flex items-start justify-between gap-3 flex-wrap mb-0.5">
+              <div className="shrink-0">
+                <h3 className="font-display text-lg font-bold text-forest-950">Schedule</h3>
+                <p className="text-xs text-forest-700 mt-0.5">{view === "list" && monthRangeLabel(schedules)}</p>
+              </div>
+
+              {/* Month + arrows: same row as "Schedule" and the List/Calendar
+                  toggle, centered between them. */}
+              {view === "calendar" && (
+                <div className="flex items-center justify-center gap-3 order-last sm:order-none basis-full sm:basis-0 sm:flex-1">
+                  <button
+                    type="button"
+                    onClick={() => shiftMonth(-1)}
+                    aria-label="Previous month"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-cream-200 text-forest-800 hover:bg-cream-200"
+                  >
+                    <ChevronLeft size={18} />
+                  </button>
+                  <h4 className="font-display text-lg font-bold text-forest-950 text-center min-w-[9rem]">
+                    {calendarMonthLabel}
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() => shiftMonth(1)}
+                    aria-label="Next month"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-cream-200 text-forest-800 hover:bg-cream-200"
+                  >
+                    <ChevronRight size={18} />
+                  </button>
+                </div>
+              )}
+
+              <div className="inline-flex rounded-full border border-cream-200 bg-cream-100 p-0.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setView("list")}
+                  aria-pressed={view === "list"}
+                  className={`inline-flex items-center gap-1.5 text-xs font-semibold rounded-full px-3 py-1.5 transition-colors ${
+                    view === "list" ? "bg-forest-900 text-cream-50" : "text-forest-800 hover:bg-cream-200"
+                  }`}
+                >
+                  <List size={14} /> List
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setView("calendar")}
+                  aria-pressed={view === "calendar"}
+                  className={`inline-flex items-center gap-1.5 text-xs font-semibold rounded-full px-3 py-1.5 transition-colors ${
+                    view === "calendar" ? "bg-forest-900 text-cream-50" : "text-forest-800 hover:bg-cream-200"
+                  }`}
+                >
+                  <CalendarDays size={14} /> Calendar
+                </button>
+              </div>
+            </div>
+            {view === "list" && <div className="mb-4" />}
+            {view === "list" && filteredSchedules.length ? (
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-forest-700 uppercase text-xs">
@@ -635,7 +782,7 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
                           <EditableCell
                             type="select"
                             options={STATUS_OPTIONS}
-                            value={s.status}
+                            value={effectiveStatus(s, todayStr)}
                             renderDisplay={(v) => <Badge status={v} />}
                             onSave={(v) => updateSchedule(s.id, "status", v)}
                           />
@@ -671,12 +818,79 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
                   })}
                 </tbody>
               </table>
-            ) : (
+            ) : view === "list" ? (
               <EmptyState>
                 {schedules.length
                   ? "No scheduled dates match these filters."
                   : 'No barangay dates posted yet. Click "Add schedule" to post one.'}
               </EmptyState>
+            ) : (
+              <div>
+                {/* Today (left) and the color key (right) on their own thin row. */}
+                <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+                  <button
+                    type="button"
+                    onClick={() => setCalendarMonth(new Date().toISOString().slice(0, 7))}
+                    className="text-xs font-semibold rounded-full border border-cream-200 bg-cream-100 text-forest-800 hover:bg-cream-200 px-3 py-1.5"
+                  >
+                    Today
+                  </button>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-forest-700">
+                    {STATUS_OPTIONS.map((o) => (
+                      <span key={o.value} className="flex items-center gap-1.5">
+                        <span
+                          className={`w-2.5 h-2.5 rounded-full ${(CALENDAR_PILL_STYLES[o.value] || "").split(" ")[0]}`}
+                        />
+                        {o.label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-semibold text-forest-500 uppercase mb-1">
+                  {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
+                    <div key={d}>{d}</div>
+                  ))}
+                </div>
+                <div className="grid grid-cols-7 gap-1">
+                  {calendarWeeks.flat().map((cell, i) =>
+                    cell ? (
+                      <div
+                        key={cell.date}
+                        className={`flex flex-col min-h-[6rem] rounded-lg border px-1.5 py-1 text-left ${
+                          cell.date === todayStr ? "border-forest-700 bg-cream-100" : "border-cream-200 bg-cream-50"
+                        }`}
+                      >
+                        <p className={`text-[11px] mb-1 shrink-0 ${cell.date === todayStr ? "font-bold text-forest-950" : "text-forest-500"}`}>
+                          {cell.day}
+                        </p>
+                        {/* Each entry fills the box with its status color (not just a small
+                            label inside it) — with one entry that means the whole remaining
+                            cell is that color, like a day-planner / task calendar. */}
+                        <div className="flex-1 flex flex-col gap-1 min-h-0">
+                          {cell.items.slice(0, 3).map((s) => (
+                            <button
+                              key={s.id}
+                              type="button"
+                              onClick={() => canEdit && openEditSchedule(s)}
+                              title={`${s.barangay_name} — ${s.services || "No details"} — ${effectiveStatus(s, todayStr)}`}
+                              className={`flex-1 min-h-[1.25rem] w-full flex items-center justify-center text-center rounded-md px-1 py-1 text-[10px] font-bold leading-tight ${
+                                CALENDAR_PILL_STYLES[effectiveStatus(s, todayStr)] ?? CALENDAR_PILL_STYLES.Upcoming
+                              } ${canEdit ? "hover:opacity-80 cursor-pointer" : "cursor-default"}`}
+                            >
+                              <span className="truncate">{s.barangay_name}</span>
+                            </button>
+                          ))}
+                          {cell.items.length > 3 && (
+                            <p className="text-[10px] text-forest-500 pl-0.5 shrink-0">+{cell.items.length - 3} more</p>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div key={`blank-${i}`} />
+                    )
+                  )}
+                </div>
+              </div>
             )}
           </Card>
         </div>
