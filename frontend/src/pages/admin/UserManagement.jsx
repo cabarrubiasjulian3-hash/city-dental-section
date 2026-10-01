@@ -60,6 +60,11 @@ function formatDate(value) {
   return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString([], { dateStyle: "medium" });
 }
 
+// ID prefix: ST- for staff (doctor/admin accounts), TC- for patients.
+function idPrefix(u) {
+  return u.role === "doctor" || u.role === "admin" ? "ST" : "TC";
+}
+
 // Why the archive button is unavailable for a row (or null if it's allowed).
 function archiveBlockedReason(u, currentUserId) {
   if (u.id === currentUserId) return "You can't archive your own account.";
@@ -120,7 +125,7 @@ export default function AdminUserManagement() {
     return users.filter((u) => {
       if (group !== "all" && groupOf(u) !== group) return false;
       if (!q) return true;
-      return [u.name, u.email, u.barangay, u.role, `TC-${String(u.id).padStart(4, "0")}`, String(u.id)].some((v) => String(v || "").toLowerCase().includes(q));
+      return [u.name, u.email, u.barangay, u.role, `${idPrefix(u)}-${String(u.id).padStart(4, "0")}`, String(u.id)].some((v) => String(v || "").toLowerCase().includes(q));
     });
   }, [users, group, search]);
 
@@ -216,7 +221,7 @@ export default function AdminUserManagement() {
                       <tr key={u.id} className="border-t border-cream-200 align-top">
                         <td className="py-3 pr-3">
                           <p className="font-medium text-forest-950">{u.name}</p>
-                          <p className="text-xs text-forest-500">TC-{String(u.id).padStart(4, "0")}</p>
+                          <p className="text-xs text-forest-500">{idPrefix(u)}-{String(u.id).padStart(4, "0")}</p>
                           {u.barangay && <p className="text-xs text-forest-600 mt-0.5">Brgy. {u.barangay}</p>}
                         </td>
                         <td className="py-3 pr-3 text-forest-700 break-all">{u.email}</td>

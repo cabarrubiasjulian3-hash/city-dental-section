@@ -194,7 +194,9 @@ function StaffDirectory() {
                   <tr key={s.id} className="border-t border-cream-200">
                     <td className="py-3">
                       <p className="font-medium">{s.name}</p>
-                      <p className="text-xs text-forest-500">ST-{String(s.id).padStart(4, "0")}</p>
+                      <p className="text-xs text-forest-500">
+                        {`ST-${String(s.account_id ?? s.id).padStart(4, "0")}`}
+                      </p>
                     </td>
                     <td className="py-3">{s.role}</td>
                     <td className="py-3 text-forest-700">
@@ -321,7 +323,7 @@ function DoctorAccessPanel({ doctors, codes, reload }) {
                 <tr key={d.id} className="border-t border-cream-200">
                   <td className="py-3">
                     <p className="font-medium">{d.name}</p>
-                    <p className="text-xs text-forest-500">TC-{String(d.id).padStart(4, "0")}</p>
+                    <p className="text-xs text-forest-500">ST-{String(d.id).padStart(4, "0")}</p>
                   </td>
                   <td className="py-3 text-forest-700">{d.email}</td>
                   <td className="py-3 text-forest-700 font-mono text-xs">{d.doctor_access_code}</td>
@@ -422,7 +424,7 @@ function DoctorAccessPanel({ doctors, codes, reload }) {
                 <tr key={d.id} className="border-t border-cream-200">
                   <td className="py-3">
                     <p className="font-medium">{d.name}</p>
-                    <p className="text-xs text-forest-500">TC-{String(d.id).padStart(4, "0")}</p>
+                    <p className="text-xs text-forest-500">ST-{String(d.id).padStart(4, "0")}</p>
                   </td>
                   <td className="py-3 text-forest-700">{d.email}</td>
                   <td className="py-3">

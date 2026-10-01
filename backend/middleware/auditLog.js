@@ -1,9 +1,11 @@
 import jwt from "jsonwebtoken";
 import db from "../db.js";
 
-// Keeps a log of what DOCTORS change on patient records and on the barangay
-// schedule, so the notification bell (admin AND doctors) can say
-// "Dr. Ana Lopez updated a patient record".
+// Keeps a log of what DOCTORS and ADMINS change on patient records and on the
+// barangay schedule, so the notification bell can say "Dr. Ana Lopez updated a
+// patient record" (admin + doctor bells — those only list DOCTOR rows) and tell
+// a PATIENT "Your information was updated" (patient bell — doctor AND admin rows
+// about that patient).
 //
 // It watches the requests instead of touching each route: mount it ONCE in
 // server.js, AFTER express.json() and BEFORE the routes —
@@ -121,7 +123,7 @@ export function auditDoctorChanges(req, res, next) {
     const header = req.headers.authorization || "";
     if (!header.startsWith("Bearer ")) return next();
     const user = jwt.verify(header.slice(7), process.env.JWT_SECRET);
-    if (user.role !== "doctor") return next();
+    if (!["doctor", "admin"].includes(user.role)) return next();
 
     const info = describe(req);
     if (!info) return next();

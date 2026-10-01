@@ -14,6 +14,10 @@ import {
   MessageSquare,
   UserPlus,
   ClipboardEdit,
+  CalendarDays,
+  MapPin,
+  Stethoscope,
+  UserCog,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../lib/api";
@@ -25,6 +29,12 @@ const NOTIFICATION_ICONS = {
   message: MessageSquare,
   staff: UserPlus,
   record_change: ClipboardEdit, // a doctor changed a patient record / the barangay schedule
+  // Patient bell:
+  info_update: UserCog, // a doctor/admin changed my information, vitals or oral chart
+  record_update: ClipboardEdit, // a doctor/admin edited one of my dental records
+  dental_record: Stethoscope, // a new dental record (e.g. a tooth extraction) was added
+  schedule_ongoing: MapPin, // a barangay dental mission is happening today
+  schedule_upcoming: CalendarDays, // a barangay dental mission is coming up
 };
 
 export default function PortalLayout({ title, subtitle, navItems }) {
@@ -85,9 +95,12 @@ export default function PortalLayout({ title, subtitle, navItems }) {
   //  - Doctor: patient chat messages nobody has answered yet — they disappear
   //    for every doctor as soon as any doctor replies — plus which doctor
   //    changed patient records or the barangay schedule.
-  // Patients don't get a bell. "Unread" is tracked client-side: anything
-  // newer than the last time the dropdown was opened counts toward the badge.
-  const hasNotifications = user?.role === "admin" || user?.role === "doctor";
+  //  - Patient: replies from the clinic, changes a doctor/admin made to their
+  //    own information, new dental records (e.g. a tooth extraction), and
+  //    ongoing / upcoming barangay dental missions.
+  // "Unread" is tracked client-side: anything newer than the last time the
+  // dropdown was opened counts toward the badge.
+  const hasNotifications = user?.role === "admin" || user?.role === "doctor" || user?.role === "patient";
   const [notifications, setNotifications] = useState([]);
   const [notifOpen, setNotifOpen] = useState(false);
   // "Last time this person opened the bell" is remembered PER ACCOUNT. It used
@@ -145,7 +158,9 @@ export default function PortalLayout({ title, subtitle, navItems }) {
 
   function openNotification(n) {
     setNotifOpen(false);
-    navigate(n.link);
+    // Some items carry router state — e.g. a new dental record opens that
+    // record on the Dental Record page (it reads location.state.openRecordId).
+    navigate(n.link, n.state ? { state: n.state } : undefined);
   }
 
   return (
@@ -225,8 +240,10 @@ export default function PortalLayout({ title, subtitle, navItems }) {
             <h1 className="text-xl font-display font-bold text-[#ebebc2]">{pageTitle}</h1>
           </div>
           <div className="flex items-center gap-4">
-            {/* Notification bell — admin (new patients / staff) and doctor
-                (unanswered patient messages). Settings lives in the profile
+            {/* Notification bell — admin (new patients / staff), doctor
+                (unanswered patient messages) and patient (clinic replies,
+                changes to their info, new dental records, barangay dental
+                missions). Settings lives in the profile
                 dropdown below, so there's no separate gear icon here
                 anymore. */}
             {hasNotifications && (
