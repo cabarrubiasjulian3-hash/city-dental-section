@@ -354,6 +354,151 @@ function PieSvg({ slices }) {
   );
 }
 
+// A text box with suggestions: type a few letters ("a") and every option that
+// contains them is listed; click one (or press Enter for the first) to pick it.
+// Emptying the box clears the filter. resetOnSelect is for "add another" boxes
+// (the picked items are shown elsewhere, as tags).
+function SuggestInput({ value, options, onSelect, placeholder, ariaLabel, width = "w-36", resetOnSelect = false }) {
+  const labelOf = (v) => options.find((o) => o.value === v)?.label ?? v ?? "";
+  const [text, setText] = useState(resetOnSelect ? "" : labelOf(value));
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    setText(resetOnSelect ? "" : labelOf(value));
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const q = text.trim().toLowerCase().replace(/\b(barangay|brgy\.?)\b/g, "").trim();
+  const matches = options
+    .filter((o) => !q || o.label.toLowerCase().includes(q))
+    .sort((a, b) => Number(b.label.toLowerCase().startsWith(q)) - Number(a.label.toLowerCase().startsWith(q)));
+
+  function pick(o) {
+    onSelect(o.value);
+    setText(resetOnSelect ? "" : o.label);
+    setOpen(false);
+  }
+  function handleChange(e) {
+    const t = e.target.value;
+    setText(t);
+    setOpen(true);
+    if (!t.trim() && value && !resetOnSelect) onSelect(""); // emptied the box -> no filter
+  }
+  function handleBlur() {
+    setOpen(false);
+    if (resetOnSelect) return setText("");
+    const exact = options.find((o) => o.label.toLowerCase() === text.trim().toLowerCase());
+    if (exact) {
+      if (exact.value !== value) onSelect(exact.value);
+      setText(exact.label);
+    } else {
+      setText(labelOf(value)); // typed something that isn't an option: go back to what's applied
+    }
+  }
+
+  return (
+    <div className="relative">
+      <input
+        type="text"
+        value={text}
+        onChange={handleChange}
+        onFocus={() => setOpen(true)}
+        onBlur={handleBlur}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            if (matches[0]) pick(matches[0]);
+          } else if (e.key === "Escape") setOpen(false);
+        }}
+        placeholder={placeholder}
+        aria-label={ariaLabel || placeholder}
+        autoComplete="off"
+        className={`${width} rounded-lg border border-cream-200 bg-cream-100 px-2 py-1 text-xs text-forest-950`}
+      />
+      {open && (
+        <ul className="absolute left-0 z-20 mt-1 max-h-48 min-w-full w-max max-w-[16rem] overflow-y-auto rounded-lg border border-cream-200 bg-cream-50 py-1 shadow-lg">
+          {matches.length ? (
+            matches.map((o) => (
+              <li key={o.value}>
+                <button
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault(); // keep focus so the click lands before blur
+                    pick(o);
+                  }}
+                  className="block w-full px-2.5 py-1 text-left text-xs text-forest-950 hover:bg-cream-200"
+                >
+                  {o.label}
+                </button>
+              </li>
+            ))
+          ) : (
+            <li className="px-2.5 py-1 text-xs text-forest-500">No match</li>
+          )}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// How the top "Report by ..." card shows the filtered rows.
+const REPORT_VIEWS = [
+  { key: "table", label: "Table" },
+  { key: "bar", label: "Bar graph" },
+  { key: "pie", label: "Pie chart" },
+  { key: "line", label: "Line graph" },
+];
+
+// The filtered rows of the top report card, drawn as a chart instead of a table.
+// Separate from SummaryChart below (which has its own controls).
+function ReportChartView({ rows, groupBy, kind }) {
+  const canSplit = groupBy !== "services"; // services have no male/female split
+  const limit = kind === "pie" ? 10 : 15;
+  const { items, cut } = useMemo(() => {
+    let list = rows.map((r) => ({ label: r.label, m: r.m || 0, f: r.f || 0, total: r.total || 0 }));
+    if (groupBy !== "age") list = [...list].sort((a, b) => b.total - a.total); // age groups keep their natural order
+    return list.length > limit ? { items: list.slice(0, limit), cut: list.slice(limit) } : { items: list, cut: [] };
+  }, [rows, groupBy, limit]);
+
+  const series =
+    canSplit && kind !== "pie"
+      ? [
+          { key: "m", label: "Male", color: MALE_COLOR },
+          { key: "f", label: "Female", color: FEMALE_COLOR },
+        ]
+      : [{ key: "total", label: "Total", color: "#3d5c2f" }];
+
+  const pieSlices = useMemo(() => {
+    const sl = items.filter((it) => it.total > 0).map((it) => ({ label: it.label, value: it.total }));
+    const others = cut.reduce((sum, it) => sum + it.total, 0);
+    if (others > 0) sl.push({ label: `Others (${cut.length})`, value: others, isOthers: true });
+    return sl;
+  }, [items, cut]);
+
+  const hasData = kind === "pie" ? pieSlices.length > 0 : items.some((it) => series.some((s) => it[s.key] > 0));
+  if (!hasData) return <EmptyState>Nothing to chart for these filters yet.</EmptyState>;
+
+  return (
+    <div>
+      {kind !== "pie" && series.length > 1 && (
+        <div className="flex items-center gap-4 mb-2">
+          {series.map((s) => (
+            <span key={s.key} className="flex items-center gap-1.5 text-xs font-semibold text-forest-900">
+              <span className="w-3 h-3 inline-block rounded-sm" style={{ backgroundColor: s.color }} />
+              {s.label}
+            </span>
+          ))}
+        </div>
+      )}
+      {kind === "pie" ? <PieSvg slices={pieSlices} /> : <AxisChart items={items} series={series} kind={kind} />}
+      {cut.length > 0 && (
+        <p className="text-xs text-forest-500 mt-1">
+          Showing the top {items.length} of {items.length + cut.length}
+          {kind === "pie" ? " (the rest are grouped as Others)" : ""} — switch to Table to see all of them.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function SummaryChart({ rows, groupBy, title }) {
   const [type, setType] = useState("bar");
   const [measure, setMeasure] = useState("total");
@@ -471,6 +616,7 @@ export default function AdminMonthlyReport({ readOnly = false }) {
   // Summary filters: which part to show, and (for Part III) which dentist.
   const [groupBy, setGroupBy] = useState("age");
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [reportView, setReportView] = useState("table"); // top report card: "table" | "bar" | "pie" | "line"
   const [showEntry, setShowEntry] = useState(false); // editable per-dentist / per-barangay tables
   const [dentistFilter, setDentistFilter] = useState("");
   // Extra report filters: barangay, age group(s) and sex.
@@ -727,90 +873,94 @@ export default function AdminMonthlyReport({ readOnly = false }) {
         </div>
 
         {filtersOpen && (
-          <div className="mt-2 pt-2 border-t border-cream-200 space-y-2 text-xs text-forest-700">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-              {groupBy !== "barangay" && (
-                <label className="flex items-center gap-1.5">
-                  Barangay
-                  <select
-                    value={barangayFilter}
-                    onChange={(e) => setBarangayFilter(e.target.value)}
-                    className="rounded-lg border border-cream-200 bg-cream-100 px-2 py-1 text-xs text-forest-950"
-                  >
-                    <option value="">All</option>
-                    {barangayRows.map((r) => (
-                      <option key={r.scope_name} value={r.scope_name}>
-                        {r.scope_name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              {groupBy !== "dentist" && (
-                <label className="flex items-center gap-1.5">
-                  Doctor
-                  <select
-                    value={dentistFilter}
-                    onChange={(e) => setDentistFilter(e.target.value)}
-                    className="rounded-lg border border-cream-200 bg-cream-100 px-2 py-1 text-xs text-forest-950"
-                  >
-                    <option value="">All</option>
-                    {dentistNames.map((n) => (
-                      <option key={n} value={n}>
-                        {drName(n)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
+          <div className="mt-2 pt-2 border-t border-cream-200 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-forest-700">
+            {groupBy !== "barangay" && (
               <label className="flex items-center gap-1.5">
-                Sex
-                <select
-                  value={sexFilter}
-                  onChange={(e) => setSexFilter(e.target.value)}
-                  className="rounded-lg border border-cream-200 bg-cream-100 px-2 py-1 text-xs text-forest-950"
-                >
-                  <option value="all">All</option>
-                  <option value="m">Male</option>
-                  <option value="f">Female</option>
-                </select>
-              </label>
-              <label className="flex items-center gap-1.5">
-                Age
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={ageText}
-                  onChange={(e) => setAgeText(e.target.value)}
-                  placeholder="21 or 21-24"
-                  aria-label="Type an exact age or age range"
-                  className="w-28 rounded-lg border border-cream-200 bg-cream-100 px-2 py-1 text-xs text-forest-950"
+                Barangay
+                <SuggestInput
+                  value={barangayFilter}
+                  onSelect={setBarangayFilter}
+                  options={barangayRows.map((r) => ({ value: r.scope_name, label: r.scope_name }))}
+                  placeholder="Type barangay"
+                  width="w-40"
                 />
               </label>
-              {ageRanges === null && <span className="text-red-600">Use 21, 21-24 or 21, 23</span>}
-            </div>
-
+            )}
+            {groupBy !== "dentist" && (
+              <label className="flex items-center gap-1.5">
+                Doctor
+                <SuggestInput
+                  value={dentistFilter}
+                  onSelect={setDentistFilter}
+                  options={dentistNames.map((n) => ({ value: n, label: drName(n) }))}
+                  placeholder="Type doctor"
+                  width="w-40"
+                />
+              </label>
+            )}
+            <label className="flex items-center gap-1.5">
+              Sex
+              <SuggestInput
+                value={sexFilter === "all" ? "" : sexFilter}
+                onSelect={(v) => setSexFilter(v || "all")}
+                options={[
+                  { value: "m", label: "Male" },
+                  { value: "f", label: "Female" },
+                ]}
+                placeholder="Male / Female"
+                width="w-28"
+              />
+            </label>
+            <label className="flex items-center gap-1.5">
+              Age
+              <input
+                type="text"
+                inputMode="numeric"
+                value={ageText}
+                onChange={(e) => setAgeText(e.target.value)}
+                placeholder="21 or 21-24"
+                aria-label="Type an exact age or age range"
+                className="w-28 rounded-lg border border-cream-200 bg-cream-100 px-2 py-1 text-xs text-forest-950"
+              />
+            </label>
+            {ageRanges === null && <span className="text-red-600">Use 21, 21-24 or 21, 23</span>}
             {groupBy !== "age" && (
               <div className="flex flex-wrap items-center gap-1.5">
-                <span className="mr-1">Age group</span>
-                {CATEGORY_GROUPS.map((g) => {
-                  const on = ageFilter.includes(g.key);
-                  return (
-                    <button
-                      key={g.key}
-                      type="button"
-                      onClick={() => toggleAge(g.key)}
-                      aria-pressed={on}
-                      className={`rounded-full px-2.5 py-1 font-semibold transition-colors ${
-                        on ? "bg-brand-900 text-brand-50" : "bg-cream-100 border border-cream-200 text-forest-900 hover:bg-cream-200"
-                      }`}
-                    >
-                      {GROUP_SHORT[g.key]}
+                <label className="flex items-center gap-1.5">
+                  Age group
+                  <SuggestInput
+                    value=""
+                    resetOnSelect
+                    onSelect={(key) => key && !ageFilter.includes(key) && toggleAge(key)}
+                    options={CATEGORY_GROUPS.filter((g) => !ageFilter.includes(g.key)).map((g) => ({ value: g.key, label: GROUP_SHORT[g.key] }))}
+                    placeholder="Type age group"
+                    width="w-36"
+                  />
+                </label>
+                {ageFilter.map((key) => (
+                  <span key={key} className="inline-flex items-center gap-1 rounded-full bg-brand-900 text-brand-50 font-semibold pl-2.5 pr-1.5 py-0.5">
+                    {GROUP_SHORT[key]}
+                    <button type="button" onClick={() => toggleAge(key)} aria-label={`Remove ${GROUP_SHORT[key]}`} className="leading-none px-0.5 hover:opacity-70">
+                      ×
                     </button>
-                  );
-                })}
+                  </span>
+                ))}
               </div>
             )}
+            <label className="flex items-center gap-1.5">
+              View as
+              <select
+                value={reportView}
+                onChange={(e) => setReportView(e.target.value)}
+                className="rounded-lg border border-cream-200 bg-cream-100 px-2 py-1 text-xs text-forest-950"
+              >
+                {REPORT_VIEWS.map((v) => (
+                  <option key={v.key} value={v.key}>
+                    {v.label}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
         )}
 
@@ -875,7 +1025,9 @@ export default function AdminMonthlyReport({ readOnly = false }) {
         title={`Report by ${GROUP_BY.find((g) => g.key === groupBy).label}`}
         subtitle={`${summary.rows.length} row${summary.rows.length === 1 ? "" : "s"} · ${formatMonthLabel(month)}`}
       >
-        {summary.rows.length ? (
+        {summary.rows.length && reportView !== "table" ? (
+          <ReportChartView rows={summary.rows} groupBy={groupBy} kind={reportView} />
+        ) : summary.rows.length ? (
           <div className="overflow-auto max-h-[34rem]">
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-cream-50">

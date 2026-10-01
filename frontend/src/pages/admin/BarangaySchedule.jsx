@@ -183,6 +183,7 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
   const [rotationsOpen, setRotationsOpen] = useState(false); // Weekly rotations list
   // Search box on the Priority Barangays card.
   const [prioritySearch, setPrioritySearch] = useState("");
+  const [priorityOpen, setPriorityOpen] = useState(true); // Priority Barangays show/hide
 
   function load() {
     api.get("/barangay-schedule").then(setSchedules).catch(() => {});
@@ -482,9 +483,78 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
         <StatCard label="Completed this month" value={completedThisMonthCount} />
         <StatCard label="Barangays not yet visited" value={notYetVisited.length} />
       </div>
+    </div>
+    </fieldset>
+
+      {/* Priority Barangays: sits above Weekly rotations as a grid of square
+          boxes. It lives OUTSIDE the read-only fieldset on purpose so doctors
+          can still use the search box. */}
+      <div className="mt-6">
+      <Card>
+        <div className="flex items-center gap-4 flex-wrap">
+          <div className="min-w-0">
+            <h3 className="font-display text-lg font-bold text-forest-950">Priority Barangays</h3>
+            <p className="text-xs text-forest-700 mt-0.5">
+              {notYetVisited.length === 0
+                ? "Zero entries this reporting month"
+                : prioritySearch.trim()
+                ? `${visiblePriority.length} of ${notYetVisited.length} entries`
+                : `${notYetVisited.length} ${notYetVisited.length === 1 ? "entry" : "entries"} this reporting month`}
+            </p>
+          </div>
+          {priorityOpen && notYetVisited.length > 0 && (
+            <input
+              type="search"
+              value={prioritySearch}
+              onChange={(e) => setPrioritySearch(e.target.value)}
+              placeholder="Search barangay"
+              aria-label="Search priority barangays"
+              className="rounded-full bg-cream-100 border border-cream-300 text-forest-950 text-xs px-3 py-1.5 w-40 focus:outline-none focus:border-forest-700"
+            />
+          )}
+          <button
+            type="button"
+            onClick={() => setPriorityOpen((v) => !v)}
+            aria-expanded={priorityOpen}
+            className="ml-auto text-xs font-semibold rounded-full bg-cream-100 border border-cream-200 text-forest-900 hover:bg-cream-200 px-3 py-1"
+          >
+            {priorityOpen ? "Hide" : "Show"} <span aria-hidden="true">{priorityOpen ? "▴" : "▾"}</span>
+          </button>
+        </div>
+
+        {priorityOpen && (
+        <div className="mt-4 max-h-[440px] overflow-y-auto pr-1">
+          {visiblePriority.length ? (
+            <div
+              className="grid gap-2"
+              style={{ gridTemplateColumns: "repeat(auto-fill, minmax(88px, 1fr))" }}
+            >
+              {visiblePriority.map((name) => (
+                <div
+                  key={name}
+                  className="aspect-square flex flex-col items-center justify-center text-center gap-0.5 rounded-lg border border-cream-200 bg-cream-50 p-1"
+                >
+                  <span className="text-xs leading-none text-forest-700">📍</span>
+                  <span className="font-semibold text-[11px] leading-tight text-forest-950">{name}</span>
+                  <span className="text-[10px] leading-none text-forest-700">
+                    {populationByBarangay[name] ? `Pop. ${populationByBarangay[name]}` : "Pop. —"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : notYetVisited.length ? (
+            <EmptyState>No barangay matches that search.</EmptyState>
+          ) : (
+            <EmptyState>Every barangay has at least one entry on the schedule.</EmptyState>
+          )}
+        </div>
+        )}
+      </Card>
+      </div>
 
       {recurringRules.length > 0 && (
-        <div className="rounded-xl border border-cream-200 bg-cream-50 px-3 py-2">
+        <fieldset disabled={readOnly} style={{ display: "contents" }}>
+        <div className="mt-6 rounded-xl border border-cream-200 bg-cream-50 px-3 py-2">
           <div className="flex items-center justify-between gap-3">
             <p
               className="text-sm font-semibold text-forest-950"
@@ -560,15 +630,13 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
           </div>
           )}
         </div>
+        </fieldset>
       )}
-
-    </div>
-    </fieldset>
 
       {/* Filters live OUTSIDE the read-only fieldset on purpose: doctors can't
           edit the schedule, but they can still filter it. */}
       {/* Slim filter bar: dates inline, the rest tucked into a "Filters" panel. */}
-      <div className="rounded-xl border border-cream-200 bg-cream-50 px-3 py-2">
+      <div className="mt-6 rounded-xl border border-cream-200 bg-cream-50 px-3 py-2">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-forest-700">
           <span className="font-semibold text-forest-950">
             Showing {filteredSchedules.length} of {schedules.length}
@@ -661,305 +729,248 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
       </div>
 
     <fieldset disabled={readOnly} style={{ display: "contents" }}>
-      <div className="mt-6 grid lg:grid-cols-3 gap-6 items-stretch">
-        <div className="lg:col-span-2">
-          <Card>
-            <div className="flex items-start justify-between gap-3 flex-wrap mb-0.5">
-              <div className="shrink-0">
-                <h3 className="font-display text-lg font-bold text-forest-950">Schedule</h3>
-                <p className="text-xs text-forest-700 mt-0.5">{view === "list" && monthRangeLabel(schedules)}</p>
-              </div>
-
-              {/* Month + arrows: same row as "Schedule" and the List/Calendar
-                  toggle, centered between them. */}
-              {view === "calendar" && (
-                <div className="flex items-center justify-center gap-3 order-last sm:order-none basis-full sm:basis-0 sm:flex-1">
-                  <button
-                    type="button"
-                    onClick={() => shiftMonth(-1)}
-                    aria-label="Previous month"
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-cream-200 text-forest-800 hover:bg-cream-200"
-                  >
-                    <ChevronLeft size={18} />
-                  </button>
-                  <h4 className="font-display text-lg font-bold text-forest-950 text-center min-w-[9rem]">
-                    {calendarMonthLabel}
-                  </h4>
-                  <button
-                    type="button"
-                    onClick={() => shiftMonth(1)}
-                    aria-label="Next month"
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-cream-200 text-forest-800 hover:bg-cream-200"
-                  >
-                    <ChevronRight size={18} />
-                  </button>
-                </div>
-              )}
-
-              <div className="inline-flex rounded-full border border-cream-200 bg-cream-100 p-0.5 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setView("list")}
-                  aria-pressed={view === "list"}
-                  className={`inline-flex items-center gap-1.5 text-xs font-semibold rounded-full px-3 py-1.5 transition-colors ${
-                    view === "list" ? "bg-forest-900 text-cream-50" : "text-forest-800 hover:bg-cream-200"
-                  }`}
-                >
-                  <List size={14} /> List
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setView("calendar")}
-                  aria-pressed={view === "calendar"}
-                  className={`inline-flex items-center gap-1.5 text-xs font-semibold rounded-full px-3 py-1.5 transition-colors ${
-                    view === "calendar" ? "bg-forest-900 text-cream-50" : "text-forest-800 hover:bg-cream-200"
-                  }`}
-                >
-                  <CalendarDays size={14} /> Calendar
-                </button>
-              </div>
+      <div className="mt-6">
+        <Card>
+          <div className="flex items-start justify-between gap-3 flex-wrap mb-0.5">
+            <div className="shrink-0">
+              <h3 className="font-display text-lg font-bold text-forest-950">Schedule</h3>
+              <p className="text-xs text-forest-700 mt-0.5">{view === "list" && monthRangeLabel(schedules)}</p>
             </div>
-            {view === "list" && <div className="mb-4" />}
-            {view === "list" && filteredSchedules.length ? (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-forest-700 uppercase text-xs">
-                    <th className="py-2 pr-2">Date</th>
-                    <th className="py-2 pr-2">Time</th>
-                    <th className="py-2 pr-2">Barangay</th>
-                    <th className="py-2 pr-2">Activity</th>
-                    <th className="py-2 pr-2">Dentist</th>
-                    <th className="py-2 pr-8 text-right">Target</th>
-                    <th className="py-2 pr-2">Status</th>
-                    <th className="py-2"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredSchedules.map((s) => {
-                    const day = formatDayLabel(s.visit_date);
-                    return (
-                      <tr key={s.id} className="border-t border-cream-200 align-top">
-                        <td className="py-2 pr-2 whitespace-nowrap">
-                          <EditableCell
-                            type="date"
-                            value={s.visit_date}
-                            onSave={(v) => updateSchedule(s.id, "visit_date", v)}
-                          />
-                          <p className="text-xs text-forest-500 pl-2">{day.bottom}</p>
-                        </td>
-                        <td className="py-2 pr-2 text-forest-700 whitespace-nowrap">
-                          <EditableCell
-                            value={s.time_range}
-                            placeholder="8:00 AM - 5:00 PM"
-                            onSave={(v) => updateSchedule(s.id, "time_range", v)}
-                          />
-                        </td>
-                        <td className="py-2 pr-2 font-medium">
-                          <EditableCell
-                            type="select"
-                            options={BARANGAY_OPTIONS}
-                            value={s.barangay_name}
-                            onSave={(v) => updateSchedule(s.id, "barangay_name", v)}
-                          />
-                          {s.recurring_rule_id && (
-                            <p className="text-[10px] text-forest-500 pl-2">🔁 Weekly</p>
-                          )}
-                        </td>
-                        <td className="py-2 pr-2 text-forest-700">
-                          <EditableCell
-                            value={s.services}
-                            placeholder="e.g. Dental Mission / QIK"
-                            onSave={(v) => updateSchedule(s.id, "services", v)}
-                          />
-                          <EditedBy row={s} className="pl-2" />
-                        </td>
-                        <td className="py-2 pr-2 text-forest-700">
-                          <EditableCell
-                            value={s.dentist}
-                            placeholder="Assign dentist"
-                            onSave={(v) => updateSchedule(s.id, "dentist", v)}
-                          />
-                        </td>
-                        <td className="py-2 pr-8 text-right">
-                          <EditableCell
-                            type="number"
-                            value={s.target ?? ""}
-                            placeholder="—"
-                            className="text-right"
-                            onSave={(v) => updateSchedule(s.id, "target", v === "" ? null : v)}
-                          />
-                        </td>
-                        <td className="py-2 pr-2">
-                          <EditableCell
-                            type="select"
-                            options={STATUS_OPTIONS}
-                            value={effectiveStatus(s, todayStr, nowMin)}
-                            renderDisplay={(v) => <Badge status={v} />}
-                            onSave={(v) => updateSchedule(s.id, "status", v)}
-                          />
-                        </td>
-                        <td className="py-2 text-right align-middle">
-                          {canEdit && (
-                            <div className="inline-flex items-center gap-1">
-                              <button
-                                type="button"
-                                title="Edit schedule entry"
-                                aria-label="Edit schedule entry"
-                                onClick={() => openEditSchedule(s)}
-                                className="inline-flex h-7 w-7 items-center justify-center rounded-full text-forest-800 hover:bg-cream-200"
-                              >
-                                <Pencil size={14} />
-                              </button>
-                              {isAdmin && (
-                                <button
-                                  type="button"
-                                  title="Archive schedule entry"
-                                  aria-label="Archive schedule entry"
-                                  onClick={() => removeSchedule(s.id)}
-                                  className="inline-flex h-7 w-7 items-center justify-center rounded-full text-red-700 hover:bg-red-50"
-                                >
-                                  <ArchiveIcon size={14} />
-                                </button>
-                              )}
-                            </div>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            ) : view === "list" ? (
-              <EmptyState>
-                {schedules.length
-                  ? "No scheduled dates match these filters."
-                  : 'No barangay dates posted yet. Click "Add schedule" to post one.'}
-              </EmptyState>
-            ) : (
-              <div>
-                {/* Today (left) and the color key (right) on their own thin row. */}
-                <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
-                  <button
-                    type="button"
-                    onClick={() => setCalendarMonth(new Date().toISOString().slice(0, 7))}
-                    className="text-xs font-semibold rounded-full border border-cream-200 bg-cream-100 text-forest-800 hover:bg-cream-200 px-3 py-1.5"
-                  >
-                    Today
-                  </button>
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-forest-700">
-                    {STATUS_OPTIONS.map((o) => (
-                      <span key={o.value} className="flex items-center gap-1.5">
-                        <span
-                          className={`w-2.5 h-2.5 rounded-full ${(CALENDAR_PILL_STYLES[o.value] || "").split(" ")[0]}`}
-                        />
-                        {o.label}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-                <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-semibold text-forest-500 uppercase mb-1">
-                  {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
-                    <div key={d}>{d}</div>
-                  ))}
-                </div>
-                <div className="grid grid-cols-7 gap-1">
-                  {calendarWeeks.flat().map((cell, i) =>
-                    cell ? (
-                      <div
-                        key={cell.date}
-                        className={`flex flex-col min-h-[6rem] rounded-lg border px-1.5 py-1 text-left ${
-                          cell.date === todayStr ? "border-forest-700 bg-cream-100" : "border-cream-200 bg-cream-50"
-                        }`}
-                      >
-                        <p className={`text-[11px] mb-1 shrink-0 ${cell.date === todayStr ? "font-bold text-forest-950" : "text-forest-500"}`}>
-                          {cell.day}
-                        </p>
-                        {/* Each entry fills the box with its status color (not just a small
-                            label inside it) — with one entry that means the whole remaining
-                            cell is that color, like a day-planner / task calendar. */}
-                        <div className="flex-1 flex flex-col gap-1 min-h-0">
-                          {cell.items.slice(0, 3).map((s) => (
-                            <button
-                              key={s.id}
-                              type="button"
-                              onClick={() => canEdit && openEditSchedule(s)}
-                              title={`${s.barangay_name} — ${s.services || "No details"} — ${effectiveStatus(s, todayStr, nowMin)}`}
-                              className={`flex-1 min-h-[1.25rem] w-full flex items-center justify-center text-center rounded-md px-1 py-1 text-[10px] font-bold leading-tight ${
-                                CALENDAR_PILL_STYLES[effectiveStatus(s, todayStr, nowMin)] ?? CALENDAR_PILL_STYLES.Upcoming
-                              } ${canEdit ? "hover:opacity-80 cursor-pointer" : "cursor-default"}`}
-                            >
-                              <span className="truncate">{s.barangay_name}</span>
-                            </button>
-                          ))}
-                          {cell.items.length > 3 && (
-                            <p className="text-[10px] text-forest-500 pl-0.5 shrink-0">+{cell.items.length - 3} more</p>
-                          )}
-                        </div>
-                      </div>
-                    ) : (
-                      <div key={`blank-${i}`} />
-                    )
-                  )}
-                </div>
+
+            {/* Month + arrows: same row as "Schedule" and the List/Calendar
+                toggle, centered between them. */}
+            {view === "calendar" && (
+              <div className="flex items-center justify-center gap-3 order-last sm:order-none basis-full sm:basis-0 sm:flex-1">
+                <button
+                  type="button"
+                  onClick={() => shiftMonth(-1)}
+                  aria-label="Previous month"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-cream-200 text-forest-800 hover:bg-cream-200"
+                >
+                  <ChevronLeft size={18} />
+                </button>
+                <h4 className="font-display text-lg font-bold text-forest-950 text-center min-w-[9rem]">
+                  {calendarMonthLabel}
+                </h4>
+                <button
+                  type="button"
+                  onClick={() => shiftMonth(1)}
+                  aria-label="Next month"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-cream-200 text-forest-800 hover:bg-cream-200"
+                >
+                  <ChevronRight size={18} />
+                </button>
               </div>
             )}
-          </Card>
-        </div>
 
-        {/* Priority Barangays: on wide screens this card is exactly as tall as
-            the Schedule card beside it (absolute inset-0 keeps it from making
-            the row taller) and the list scrolls inside it; on narrow screens
-            it just gets a max height. */}
-        <div className="relative lg:min-h-[420px]">
-          <Card className="flex flex-col max-h-[520px] lg:max-h-none lg:absolute lg:inset-0">
-            <div className="flex items-start justify-between gap-3 flex-wrap">
-              <div className="min-w-0">
-                <h3 className="font-display text-lg font-bold text-forest-950">Priority Barangays</h3>
-                <p className="text-xs text-forest-700 mt-0.5">
-                  {notYetVisited.length === 0
-                    ? "Zero entries this reporting month"
-                    : prioritySearch.trim()
-                    ? `${visiblePriority.length} of ${notYetVisited.length} entries`
-                    : `${notYetVisited.length} ${notYetVisited.length === 1 ? "entry" : "entries"} this reporting month`}
-                </p>
-              </div>
-              {notYetVisited.length > 0 && (
-                <input
-                  type="search"
-                  value={prioritySearch}
-                  onChange={(e) => setPrioritySearch(e.target.value)}
-                  placeholder="Search barangay"
-                  aria-label="Search priority barangays"
-                  className="rounded-full bg-cream-100 border border-cream-300 text-forest-950 text-xs px-3 py-1.5 w-40 focus:outline-none focus:border-forest-700"
-                />
-              )}
+            <div className="inline-flex rounded-full border border-cream-200 bg-cream-100 p-0.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => setView("list")}
+                aria-pressed={view === "list"}
+                className={`inline-flex items-center gap-1.5 text-xs font-semibold rounded-full px-3 py-1.5 transition-colors ${
+                  view === "list" ? "bg-forest-900 text-cream-50" : "text-forest-800 hover:bg-cream-200"
+                }`}
+              >
+                <List size={14} /> List
+              </button>
+              <button
+                type="button"
+                onClick={() => setView("calendar")}
+                aria-pressed={view === "calendar"}
+                className={`inline-flex items-center gap-1.5 text-xs font-semibold rounded-full px-3 py-1.5 transition-colors ${
+                  view === "calendar" ? "bg-forest-900 text-cream-50" : "text-forest-800 hover:bg-cream-200"
+                }`}
+              >
+                <CalendarDays size={14} /> Calendar
+              </button>
             </div>
-            <div className="mt-4 flex-1 min-h-0 overflow-y-auto pr-1">
-              {visiblePriority.length ? (
-                <div className="space-y-2">
-                  {visiblePriority.map((name) => (
-                    <div
-                      key={name}
-                      className="flex items-center justify-between gap-2 bg-cream-100 rounded-xl px-4 py-3"
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-forest-700 shrink-0">📍</span>
-                        <span className="font-medium text-forest-950 truncate">{name}</span>
-                      </div>
-                      <span className="text-xs text-forest-700 whitespace-nowrap">
-                        {populationByBarangay[name] ? `Pop. ${populationByBarangay[name]}` : "Pop. —"}
-                      </span>
-                    </div>
+          </div>
+          {view === "list" && <div className="mb-4" />}
+          {view === "list" && filteredSchedules.length ? (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-forest-700 uppercase text-xs">
+                  <th className="py-2 pr-2">Date</th>
+                  <th className="py-2 pr-2">Time</th>
+                  <th className="py-2 pr-2">Barangay</th>
+                  <th className="py-2 pr-2">Activity</th>
+                  <th className="py-2 pr-2">Dentist</th>
+                  <th className="py-2 pr-8 text-right">Target</th>
+                  <th className="py-2 pr-2">Status</th>
+                  <th className="py-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredSchedules.map((s) => {
+                  const day = formatDayLabel(s.visit_date);
+                  return (
+                    <tr key={s.id} className="border-t border-cream-200 align-top">
+                      <td className="py-2 pr-2 whitespace-nowrap">
+                        <EditableCell
+                          type="date"
+                          value={s.visit_date}
+                          onSave={(v) => updateSchedule(s.id, "visit_date", v)}
+                        />
+                        <p className="text-xs text-forest-500 pl-2">{day.bottom}</p>
+                      </td>
+                      <td className="py-2 pr-2 text-forest-700 whitespace-nowrap">
+                        <EditableCell
+                          value={s.time_range}
+                          placeholder="8:00 AM - 5:00 PM"
+                          onSave={(v) => updateSchedule(s.id, "time_range", v)}
+                        />
+                      </td>
+                      <td className="py-2 pr-2 font-medium">
+                        <EditableCell
+                          type="select"
+                          options={BARANGAY_OPTIONS}
+                          value={s.barangay_name}
+                          onSave={(v) => updateSchedule(s.id, "barangay_name", v)}
+                        />
+                        {s.recurring_rule_id && (
+                          <p className="text-[10px] text-forest-500 pl-2">🔁 Weekly</p>
+                        )}
+                      </td>
+                      <td className="py-2 pr-2 text-forest-700">
+                        <EditableCell
+                          value={s.services}
+                          placeholder="e.g. Dental Mission / QIK"
+                          onSave={(v) => updateSchedule(s.id, "services", v)}
+                        />
+                        <EditedBy row={s} className="pl-2" />
+                      </td>
+                      <td className="py-2 pr-2 text-forest-700">
+                        <EditableCell
+                          value={s.dentist}
+                          placeholder="Assign dentist"
+                          onSave={(v) => updateSchedule(s.id, "dentist", v)}
+                        />
+                      </td>
+                      <td className="py-2 pr-8 text-right">
+                        <EditableCell
+                          type="number"
+                          value={s.target ?? ""}
+                          placeholder="—"
+                          className="text-right"
+                          onSave={(v) => updateSchedule(s.id, "target", v === "" ? null : v)}
+                        />
+                      </td>
+                      <td className="py-2 pr-2">
+                        <EditableCell
+                          type="select"
+                          options={STATUS_OPTIONS}
+                          value={effectiveStatus(s, todayStr, nowMin)}
+                          renderDisplay={(v) => <Badge status={v} />}
+                          onSave={(v) => updateSchedule(s.id, "status", v)}
+                        />
+                      </td>
+                      <td className="py-2 text-right align-middle">
+                        {canEdit && (
+                          <div className="inline-flex items-center gap-1">
+                            <button
+                              type="button"
+                              title="Edit schedule entry"
+                              aria-label="Edit schedule entry"
+                              onClick={() => openEditSchedule(s)}
+                              className="inline-flex h-7 w-7 items-center justify-center rounded-full text-forest-800 hover:bg-cream-200"
+                            >
+                              <Pencil size={14} />
+                            </button>
+                            {isAdmin && (
+                              <button
+                                type="button"
+                                title="Archive schedule entry"
+                                aria-label="Archive schedule entry"
+                                onClick={() => removeSchedule(s.id)}
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-full text-red-700 hover:bg-red-50"
+                              >
+                                <ArchiveIcon size={14} />
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          ) : view === "list" ? (
+            <EmptyState>
+              {schedules.length
+                ? "No scheduled dates match these filters."
+                : 'No barangay dates posted yet. Click "Add schedule" to post one.'}
+            </EmptyState>
+          ) : (
+            <div>
+              {/* Today (left) and the color key (right) on their own thin row. */}
+              <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+                <button
+                  type="button"
+                  onClick={() => setCalendarMonth(new Date().toISOString().slice(0, 7))}
+                  className="text-xs font-semibold rounded-full border border-cream-200 bg-cream-100 text-forest-800 hover:bg-cream-200 px-3 py-1.5"
+                >
+                  Today
+                </button>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-forest-700">
+                  {STATUS_OPTIONS.map((o) => (
+                    <span key={o.value} className="flex items-center gap-1.5">
+                      <span
+                        className={`w-2.5 h-2.5 rounded-full ${(CALENDAR_PILL_STYLES[o.value] || "").split(" ")[0]}`}
+                      />
+                      {o.label}
+                    </span>
                   ))}
                 </div>
-              ) : notYetVisited.length ? (
-                <EmptyState>No barangay matches that search.</EmptyState>
-              ) : (
-                <EmptyState>Every barangay has at least one entry on the schedule.</EmptyState>
-              )}
+              </div>
+              <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-semibold text-forest-500 uppercase mb-1">
+                {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
+                  <div key={d}>{d}</div>
+                ))}
+              </div>
+              <div className="grid grid-cols-7 gap-1">
+                {calendarWeeks.flat().map((cell, i) =>
+                  cell ? (
+                    <div
+                      key={cell.date}
+                      className={`flex flex-col min-h-[6rem] rounded-lg border px-1.5 py-1 text-left ${
+                        cell.date === todayStr ? "border-forest-700 bg-cream-100" : "border-cream-200 bg-cream-50"
+                      }`}
+                    >
+                      <p className={`text-[11px] mb-1 shrink-0 ${cell.date === todayStr ? "font-bold text-forest-950" : "text-forest-500"}`}>
+                        {cell.day}
+                      </p>
+                      {/* Each entry fills the box with its status color (not just a small
+                          label inside it) — with one entry that means the whole remaining
+                          cell is that color, like a day-planner / task calendar. */}
+                      <div className="flex-1 flex flex-col gap-1 min-h-0">
+                        {cell.items.slice(0, 3).map((s) => (
+                          <button
+                            key={s.id}
+                            type="button"
+                            onClick={() => canEdit && openEditSchedule(s)}
+                            title={`${s.barangay_name} — ${s.services || "No details"} — ${effectiveStatus(s, todayStr, nowMin)}`}
+                            className={`flex-1 min-h-[1.25rem] w-full flex items-center justify-center text-center rounded-md px-1 py-1 text-[10px] font-bold leading-tight ${
+                              CALENDAR_PILL_STYLES[effectiveStatus(s, todayStr, nowMin)] ?? CALENDAR_PILL_STYLES.Upcoming
+                            } ${canEdit ? "hover:opacity-80 cursor-pointer" : "cursor-default"}`}
+                          >
+                            <span className="truncate">{s.barangay_name}</span>
+                          </button>
+                        ))}
+                        {cell.items.length > 3 && (
+                          <p className="text-[10px] text-forest-500 pl-0.5 shrink-0">+{cell.items.length - 3} more</p>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div key={`blank-${i}`} />
+                  )
+                )}
+              </div>
             </div>
-          </Card>
-        </div>
+          )}
+        </Card>
       </div>
 
       <Modal isOpen={showForm} onClose={() => setShowForm(false)}>
