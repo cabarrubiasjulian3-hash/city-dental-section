@@ -29,8 +29,15 @@ router.get("/:patientId/tooth-chart", (req, res) => {
     return res.status(403).json({ error: "Not authorized." });
   }
 
+  // record_id = the service record (visit) that set this tooth, or null if it
+  // wasn't tied to one (older data) or that record no longer exists.
   const rows = db
-    .prepare("SELECT tooth_number, condition, treatment_note FROM tooth_conditions WHERE patient_id = ?")
+    .prepare(
+      `SELECT tc.tooth_number, tc.condition, tc.treatment_note, dr.id AS record_id
+         FROM tooth_conditions tc
+         LEFT JOIN dental_records dr ON dr.id = tc.record_id AND dr.patient_id = tc.patient_id
+        WHERE tc.patient_id = ?`
+    )
     .all(patientId);
   const byTooth = new Map(rows.map((r) => [r.tooth_number, r]));
 
@@ -38,6 +45,7 @@ router.get("/:patientId/tooth-chart", (req, res) => {
     tooth_number,
     condition: byTooth.get(tooth_number)?.condition || "sound",
     treatment_note: byTooth.get(tooth_number)?.treatment_note || "",
+    record_id: byTooth.get(tooth_number)?.record_id ?? null,
   }));
 
   const dmft = chart.filter((t) => ["decayed", "missing", "filled"].includes(t.condition)).length;
@@ -52,7 +60,7 @@ router.patch("/:patientId/tooth-chart/:toothNumber", requireRole("admin", "docto
     return res.status(403).json({ error: "You can only edit your own patients." });
   }
   const { toothNumber } = req.params;
-  const { condition, treatment_note } = req.body;
+  const { condition, treatment_note, record_id } = req.body;
 
   if (!ALL_TEETH.includes(toothNumber)) {
     return res.status(400).json({ error: "Invalid tooth number." });
@@ -62,15 +70,40 @@ router.patch("/:patientId/tooth-chart/:toothNumber", requireRole("admin", "docto
     return res.status(400).json({ error: "Invalid condition." });
   }
 
+  // record_id (optional) = "this change belongs to that service record". It's
+  // sent when an existing record is being edited, or for a new patient's first
+  // record. Without it the change is "pending" (record_id NULL) until
+  // POST /dental-records attaches it to the record being added.
+  let recordId = null;
+  if (record_id !== undefined && record_id !== null) {
+    const record = db.prepare("SELECT id FROM dental_records WHERE id = ? AND patient_id = ?").get(Number(record_id), patientId);
+    if (!record) return res.status(400).json({ error: "That service record doesn't belong to this patient." });
+    recordId = record.id;
+
+    // A tooth that another visit already recorded can't be changed from this one.
+    const existing = db
+      .prepare(
+        `SELECT tc.condition, dr.id AS owner
+           FROM tooth_conditions tc
+           LEFT JOIN dental_records dr ON dr.id = tc.record_id AND dr.patient_id = tc.patient_id
+          WHERE tc.patient_id = ? AND tc.tooth_number = ?`
+      )
+      .get(patientId, toothNumber);
+    if (existing && existing.owner && existing.owner !== recordId && existing.condition !== "sound") {
+      return res.status(409).json({ error: `Tooth ${toothNumber} was recorded in another visit, so it can't be changed in this record.` });
+    }
+  }
+
   db.prepare(
-    `INSERT INTO tooth_conditions (patient_id, tooth_number, condition, treatment_note, updated_at)
-     VALUES (?, ?, ?, ?, datetime('now'))
+    `INSERT INTO tooth_conditions (patient_id, tooth_number, condition, treatment_note, record_id, updated_at)
+     VALUES (?, ?, ?, ?, ?, datetime('now'))
      ON CONFLICT(patient_id, tooth_number)
-     DO UPDATE SET condition = excluded.condition, treatment_note = excluded.treatment_note, updated_at = datetime('now')`
-  ).run(patientId, toothNumber, condition, treatment_note || null);
+     DO UPDATE SET condition = excluded.condition, treatment_note = excluded.treatment_note,
+                   record_id = excluded.record_id, updated_at = datetime('now')`
+  ).run(patientId, toothNumber, condition, treatment_note || null, recordId);
   stampEdit("users", patientId, req.user);
 
-  res.json({ tooth_number: toothNumber, condition, treatment_note: treatment_note || "" });
+  res.json({ tooth_number: toothNumber, condition, treatment_note: treatment_note || "", record_id: recordId });
 });
 
 export default router;

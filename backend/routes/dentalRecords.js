@@ -37,7 +37,7 @@ router.get("/", (req, res) => {
 // Report (by the patient's barangay, and by the attending dentist) — see
 // lib/reportSync.js.
 router.post("/", requireRole("admin", "doctor"), (req, res) => {
-  const { patient_id, record_date, procedure, dentist, notes } = req.body;
+  const { patient_id, record_date, procedure, dentist, notes, teeth } = req.body;
   if (req.user.role === "doctor" && !getDoctorAccessiblePatientIds(db, req.user).has(Number(patient_id))) {
     return res.status(403).json({ error: "You can only add records for your own patients." });
   }
@@ -69,6 +69,13 @@ router.post("/", requireRole("admin", "doctor"), (req, res) => {
       snapshot.report_barangay,
       snapshot.report_dentist
     );
+  // The teeth the admin changed on the Oral Health Chart while adding this
+  // record belong to it — tie them to this visit so editing a different record
+  // later can't change them (see routes/toothChart.js).
+  if (Array.isArray(teeth) && teeth.length) {
+    const tie = db.prepare("UPDATE tooth_conditions SET record_id = ? WHERE patient_id = ? AND tooth_number = ?");
+    for (const tooth of teeth) if (typeof tooth === "string") tie.run(info.lastInsertRowid, Number(patient_id), tooth);
+  }
   stampEdit("dental_records", info.lastInsertRowid, req.user);
   stampEdit("users", patient_id, req.user);
   const row = db.prepare("SELECT * FROM dental_records WHERE id = ?").get(info.lastInsertRowid);

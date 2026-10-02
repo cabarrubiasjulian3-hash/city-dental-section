@@ -411,6 +411,21 @@ const NEW_PATIENT_BASIC_FIELDS = [
 // don't belong to the patient record at all, they become the first row in
 // /dental-records once the patient is created, so they're kept out of both
 // NEW_PATIENT_BASIC_FIELDS (POST /patients body) and the generic PATCH loop.
+// A date <input type="date"> only shows a value in YYYY-MM-DD form. Records
+// that were imported from Excel can have the date saved as plain text (e.g.
+// "10/2/2026" or "Oct 2, 2026"), which made the date box come up blank when
+// editing a record. This turns whatever is stored into YYYY-MM-DD ("" if it
+// really can't be read as a date).
+function toDateInputValue(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return "";
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, "0")}-${String(parsed.getDate()).padStart(2, "0")}`;
+}
+
 const INITIAL_RECORD_FIELDS = ["initial_record_date", "initial_procedure", "initial_dentist", "initial_notes"];
 
 export default function AdminPatients({ readOnly = false }) {
@@ -438,6 +453,8 @@ export default function AdminPatients({ readOnly = false }) {
   // Which Service History row is currently in edit mode (its pencil icon was
   // clicked), the draft values being typed, and any save error to show.
   const [editingRecordId, setEditingRecordId] = useState(null);
+  // Teeth changed on the chart while the Add Service Record popup is open.
+  const [addRecordTeeth, setAddRecordTeeth] = useState([]);
   const [recordDraft, setRecordDraft] = useState({ record_date: "", procedure: "", dentist: "", notes: "" });
   const [savingRecordEdit, setSavingRecordEdit] = useState(false);
   const [recordEditError, setRecordEditError] = useState("");
@@ -775,7 +792,7 @@ export default function AdminPatients({ readOnly = false }) {
       // (which used to leave it stuck showing "Pending" / made the Status
       // column meaningless). Required fields are enforced below by disabling
       // the submit button, so this should always have a date + procedure.
-      await api.post("/dental-records", {
+      const firstRecord = await api.post("/dental-records", {
         patient_id: created.id,
         record_date: newPatientForm.initial_record_date,
         procedure: newPatientForm.initial_procedure,
@@ -790,7 +807,7 @@ export default function AdminPatients({ readOnly = false }) {
         try {
           await Promise.all(
             markedTeeth.map(([tooth, condition]) =>
-              api.patch(`/patients/${created.id}/tooth-chart/${tooth}`, { condition })
+              api.patch(`/patients/${created.id}/tooth-chart/${tooth}`, { condition, record_id: firstRecord.id })
             )
           );
         } catch (chartError) {
@@ -883,9 +900,10 @@ export default function AdminPatients({ readOnly = false }) {
     setAddingRecord(true);
     setAddRecordError("");
     try {
-      const row = await api.post("/dental-records", { ...newRecord, patient_id: selected.id });
+      const row = await api.post("/dental-records", { ...newRecord, patient_id: selected.id, teeth: addRecordTeeth });
       setRecords((list) => [row, ...list]);
       setNewRecord({ record_date: "", procedure: "", dentist: "", notes: "" });
+      setAddRecordTeeth([]);
       setPatients((list) =>
         list.map((p) =>
           p.id === selected.id
@@ -921,7 +939,7 @@ export default function AdminPatients({ readOnly = false }) {
   function startEditRecord(record) {
     setRecordEditError("");
     setRecordDraft({
-      record_date: (record.record_date || "").slice(0, 10),
+      record_date: toDateInputValue(record.record_date),
       procedure: record.procedure || "",
       dentist: record.dentist || "",
       notes: record.notes || "",
@@ -941,7 +959,9 @@ export default function AdminPatients({ readOnly = false }) {
     }
     // Only send what actually changed.
     const body = {};
-    if (recordDraft.record_date !== (record.record_date || "").slice(0, 10)) body.record_date = recordDraft.record_date;
+    // Only send the date if it was actually changed in the box (a stored date that
+    // was in another format stays as it is unless the person picks a new one).
+    if (recordDraft.record_date !== toDateInputValue(record.record_date)) body.record_date = recordDraft.record_date;
     if (recordDraft.procedure !== (record.procedure || "")) body.procedure = recordDraft.procedure;
     if (recordDraft.dentist !== (record.dentist || "")) body.dentist = recordDraft.dentist;
     if (recordDraft.notes !== (record.notes || "")) body.notes = recordDraft.notes;
@@ -1958,10 +1978,11 @@ export default function AdminPatients({ readOnly = false }) {
             {editingRecordId !== null && (
               <div className="pt-2 border-t border-cream-200 space-y-2">
                 <p className="text-xs text-forest-700">
-                  Oral Health Chart — click a tooth to update its condition. Tooth changes are saved right away;
-                  use the ✓ on the row above to save the service record itself.
+                  Oral Health Chart — only the teeth set in this record (and teeth with no record yet) can be changed;
+                  teeth recorded in other visits are locked. Tooth changes are saved right away; use the ✓ on the row
+                  above to save the service record itself.
                 </p>
-                <ToothChart patientId={selected.id} isAdmin />
+                <ToothChart patientId={selected.id} isAdmin recordId={editingRecordId} />
               </div>
             )}
 
@@ -2024,8 +2045,8 @@ export default function AdminPatients({ readOnly = false }) {
                 {selected.name} · TC-{String(selected.id).padStart(4, "0")}
               </p>
               <p className="text-xs text-forest-700 mt-1">
-                For a returning patient, add the new visit and procedure, and update the Oral Health Chart if anything
-                changed.
+                For a returning patient, the Oral Health Chart already shows everything recorded in past visits — just
+                mark only the new findings today on teeth that have no record yet. Teeth that already have a condition are locked.
               </p>
             </div>
 
@@ -2074,7 +2095,7 @@ export default function AdminPatients({ readOnly = false }) {
               />
 
               <div className="col-span-2 pt-2">
-                <ToothChart patientId={selected.id} isAdmin />
+                <ToothChart patientId={selected.id} isAdmin lockRecorded onTeethChanged={setAddRecordTeeth} />
               </div>
 
               <div className="col-span-2 flex justify-end gap-2 pt-1">

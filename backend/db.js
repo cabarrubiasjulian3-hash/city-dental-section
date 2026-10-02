@@ -285,6 +285,38 @@ CREATE TABLE IF NOT EXISTS tooth_conditions (
 );
 `);
 
+// Which service record (visit) set each tooth's condition. Used so that when a
+// record is edited, only the teeth that record set (and teeth with no record
+// yet) can be changed — teeth set by other visits are locked. Deliberately NOT
+// a foreign key: archive/restore re-inserts tooth rows before dental_records.
+// A stale id (record archived/deleted) is treated as "no record" by the API.
+const toothColumns = db.prepare("PRAGMA table_info(tooth_conditions)").all().map((c) => c.name);
+if (!toothColumns.includes("record_id")) {
+  db.exec("ALTER TABLE tooth_conditions ADD COLUMN record_id INTEGER");
+}
+
+// One-time backfill: teeth recorded before this column existed have no record
+// attached, which would leave them editable from every visit. Tie each one to
+// the patient's service record that was created closest in time to when the
+// tooth was set (the first/initial chart ends up on the first visit). Runs
+// once; after that a NULL record_id only means "changed, not saved to a
+// record yet".
+db.exec("CREATE TABLE IF NOT EXISTS schema_flags (name TEXT PRIMARY KEY)");
+if (!db.prepare("SELECT 1 FROM schema_flags WHERE name = 'tooth_record_backfill'").get()) {
+  const untied = db.prepare("SELECT id, patient_id, updated_at FROM tooth_conditions WHERE record_id IS NULL AND condition != 'sound'").all();
+  const nearestRecord = db.prepare(
+    "SELECT id FROM dental_records WHERE patient_id = ? ORDER BY ABS(strftime('%s', created_at) - strftime('%s', ?)), id LIMIT 1"
+  );
+  const tieTooth = db.prepare("UPDATE tooth_conditions SET record_id = ? WHERE id = ?");
+  db.transaction(() => {
+    for (const tooth of untied) {
+      const record = nearestRecord.get(tooth.patient_id, tooth.updated_at);
+      if (record) tieTooth.run(record.id, tooth.id);
+    }
+  })();
+  db.prepare("INSERT INTO schema_flags (name) VALUES ('tooth_record_backfill')").run();
+}
+
 // Messaging now belongs to doctors (admin no longer has a Messages page), but
 // databases created before that have CHECK(sender IN ('patient','admin')) on
 // this table, which makes every doctor reply fail. SQLite can't alter a CHECK
