@@ -1004,9 +1004,9 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
           <Field label="Barangay (where it is held)">
             <select required value={form.barangay_name} onChange={(e) => chooseBarangay(e.target.value)} className={INPUT_CLASS}>
               <option value="">Select barangay…</option>
-              {withCurrent([CITY_DENTAL_OFFICE, ...TAYABAS_BARANGAYS], form.barangay_name).map((name) => (
+              {TAYABAS_BARANGAYS.map((name) => (
                 <option key={name} value={name}>
-                  {name === CITY_DENTAL_OFFICE ? "City Dental Office (services at the clinic)" : name}
+                  {name}
                 </option>
               ))}
             </select>

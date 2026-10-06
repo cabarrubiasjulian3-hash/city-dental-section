@@ -62,7 +62,7 @@ function formatDate(value) {
 
 // ID prefix: ST- for staff (doctor/admin accounts), TC- for patients.
 function idPrefix(u) {
-  return u.role === "doctor" || u.role === "admin" ? "ST" : "TC";
+  return u.role === "doctor" || u.role === "admin" ? "ST" : "PT";
 }
 
 // Why the archive button is unavailable for a row (or null if it's allowed).

@@ -41,7 +41,7 @@ function patientSearchBlob(p, status) {
     p.barangay, p.address, p.occupation, p.place_of_birth, p.parent_guardian, p.cellphone_no,
     p.latest_dentist, p.latest_procedure, status,
     p.is_pregnant ? "pregnant" : "", p.is_senior_citizen ? "senior citizen senior" : "", p.is_pwd ? "pwd" : "",
-    `tc-${String(p.id).padStart(4, "0")} tc-${p.id} ${p.id}`,
+    `pt-${String(p.id).padStart(4, "0")} pt-${p.id} ${p.id}`,
   ];
   if (p.birthdate) {
     const [y, m, d] = String(p.birthdate).slice(0, 10).split("-");
@@ -1716,7 +1716,7 @@ export default function AdminPatients({ readOnly = false }) {
                     >
                       <td className="px-2 py-2">
                         <p className="font-semibold text-forest-950">{p.name}</p>
-                        <p className="text-xs text-forest-500">TC-{String(p.id).padStart(4, "0")}</p>
+                        <p className="text-xs text-forest-500">PT-{String(p.id).padStart(4, "0")}</p>
                         <EditedBy row={p} className="print:hidden" />
                       </td>
                       <td className="px-2 py-2 text-forest-700">{p.barangay || "—"}</td>
@@ -1797,7 +1797,7 @@ export default function AdminPatients({ readOnly = false }) {
             <div>
               <h3 className="font-display text-lg font-bold text-forest-950">{selected.name}</h3>
               <p className="text-sm text-forest-500 mt-0.5">
-                TC-{String(selected.id).padStart(4, "0")} · Service History
+                PT-{String(selected.id).padStart(4, "0")} · Service History
               </p>
             </div>
 
@@ -2042,7 +2042,7 @@ export default function AdminPatients({ readOnly = false }) {
             <div>
               <h3 className="font-display text-lg font-bold text-forest-950">Add Service Record</h3>
               <p className="text-sm text-forest-500 mt-0.5">
-                {selected.name} · TC-{String(selected.id).padStart(4, "0")}
+                {selected.name} · PT-{String(selected.id).padStart(4, "0")}
               </p>
               <p className="text-xs text-forest-700 mt-1">
                 For a returning patient, the Oral Health Chart already shows everything recorded in past visits — just
@@ -2135,13 +2135,13 @@ export default function AdminPatients({ readOnly = false }) {
             <div>
               <h3 className="font-display text-lg font-bold text-forest-950">Individual Patient Treatment Record</h3>
               <p className="text-sm text-forest-500 mt-0.5">
-                {selected.name} · TC-{String(selected.id).padStart(4, "0")}
+                {selected.name} · PT-{String(selected.id).padStart(4, "0")}
               </p>
             </div>
             {showDetails && (
               <div className="space-y-3">
                 <p className="text-xs font-semibold uppercase tracking-wide text-forest-700">
-                  Republic of the Philippines · Department of Health · {selected.name} (TC-
+                  Republic of the Philippines · Department of Health · {selected.name} (PT-
                   {String(selected.id).padStart(4, "0")})
                 </p>
 
@@ -2518,7 +2518,7 @@ export default function AdminPatients({ readOnly = false }) {
                 className="font-display text-xl font-bold text-forest-950"
               />
               <p className="text-sm text-forest-500 mt-0.5">
-                TC-{String(selected.id).padStart(4, "0")}
+                PT-{String(selected.id).padStart(4, "0")}
                 {records[0]?.dentist ? ` · Dr. ${records[0].dentist}` : ""}
               </p>
             </div>
