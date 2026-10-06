@@ -401,6 +401,17 @@ if (!barangayScheduleColumns.includes("recurring_rule_id")) {
   db.exec("ALTER TABLE barangay_schedule ADD COLUMN recurring_rule_id INTEGER REFERENCES recurring_barangay_schedule(id)");
 }
 
+// "Barangays that can attend" — a health station (BHS) serves several
+// barangays; patients may go to any scheduled station, this just lists who it
+// is meant for. Comma-separated names (see lib/barangaysServed.js).
+if (!barangayScheduleColumns.includes("barangays_served")) {
+  db.exec("ALTER TABLE barangay_schedule ADD COLUMN barangays_served TEXT");
+}
+const recurringColumns = db.prepare("PRAGMA table_info(recurring_barangay_schedule)").all().map((c) => c.name);
+if (!recurringColumns.includes("barangays_served")) {
+  db.exec("ALTER TABLE recurring_barangay_schedule ADD COLUMN barangays_served TEXT");
+}
+
 // Old "appointments"/"billing" tables from a previous version of this app —
 // drop them if a pre-existing database file still has them.
 db.exec("DROP TABLE IF EXISTS appointments");

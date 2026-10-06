@@ -15,6 +15,12 @@ function formatLongDate(dateStr) {
   return d.toLocaleDateString("en-PH", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
 }
 
+// "Brgy. Camaysa" for a barangay visit, plain "City Dental Office" when the
+// service is held at the clinic.
+function placeLabel(name) {
+  return name === "City Dental Office" ? name : `Brgy. ${name}`;
+}
+
 // A short label for the closed box — the first service listed, or a
 // fallback, so every box reads like "Tooth Extraction · Camaysa · Oct 4, 2026".
 function boxLabel(s) {
@@ -49,7 +55,7 @@ function ScheduleBox({ s, status, onOpen }) {
           </span>
         )}
       </div>
-      <p className="text-sm text-forest-800 mt-1">Brgy. {s.barangay_name}</p>
+      <p className="text-sm text-forest-800 mt-1">{placeLabel(s.barangay_name)}</p>
       <p className="text-sm text-forest-700">{formatShortDate(s.visit_date)}</p>
     </button>
   );
@@ -92,7 +98,7 @@ export default function PatientBarangaySchedule() {
     const q = search.trim().toLowerCase();
     if (!q) return active;
     return active.filter(({ s }) =>
-      [s.barangay_name, s.services, s.location, formatShortDate(s.visit_date), s.visit_date].some((v) =>
+      [s.barangay_name, s.services, s.location, s.barangays_served, formatShortDate(s.visit_date), s.visit_date].some((v) =>
         String(v || "").toLowerCase().includes(q)
       )
     );
@@ -146,7 +152,7 @@ export default function PatientBarangaySchedule() {
           <div className="space-y-3">
             <div className="flex items-start justify-between gap-3 pr-6">
               <div>
-                <h3 className="font-display text-lg font-bold text-forest-950">Brgy. {selected.s.barangay_name}</h3>
+                <h3 className="font-display text-lg font-bold text-forest-950">{placeLabel(selected.s.barangay_name)}</h3>
                 <p className="text-sm text-forest-700">{formatLongDate(selected.s.visit_date)}</p>
               </div>
               {selected.status && (
@@ -174,6 +180,11 @@ export default function PatientBarangaySchedule() {
               {selected.s.location && (
                 <p className="text-sm text-forest-800 flex items-center gap-1.5">
                   <MapPin size={14} className="text-forest-500 shrink-0" /> {selected.s.location}
+                </p>
+              )}
+              {selected.s.barangays_served && (
+                <p className="text-xs text-forest-700">
+                  <span className="font-semibold">Barangays that can attend:</span> {selected.s.barangays_served}
                 </p>
               )}
               {selected.s.notes && <p className="text-xs text-forest-700 italic">{selected.s.notes}</p>}

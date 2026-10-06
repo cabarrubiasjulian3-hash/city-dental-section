@@ -6,9 +6,11 @@ import { Card, StatCard, Badge, EmptyState } from "../../components/ui";
 import EditableCell from "../../components/EditableCell";
 import EditedBy from "../../components/EditedBy";
 import Modal from "../../components/Modal";
+import BarangayMultiSelect from "../../components/BarangayMultiSelect";
 import { IconCalendar } from "../../components/icons";
 import { TAYABAS_BARANGAYS } from "../../lib/barangays";
 import { effectiveStatus, manilaToday, manilaMinutes } from "../../lib/scheduleStatus";
+import { CITY_DENTAL_OFFICE, stationForHost, staffNameFor } from "../../lib/healthStations";
 
 const STATUS_OPTIONS = [
   { value: "Upcoming", label: "Upcoming" },
@@ -30,7 +32,7 @@ const CALENDAR_PILL_STYLES = {
   "Not Completed": "bg-red-100 text-red-800",
 };
 
-const BARANGAY_OPTIONS = TAYABAS_BARANGAYS.map((name) => ({ value: name, label: name }));
+const BARANGAY_OPTIONS = [...TAYABAS_BARANGAYS, CITY_DENTAL_OFFICE].map((name) => ({ value: name, label: name }));
 
 // "Add schedule" covers any barangay activity, one-off or community-wide,
 // so all 5 real services are selectable — these feed straight into the
@@ -89,28 +91,54 @@ function monthRangeLabel(schedules) {
   return startLabel === endLabel ? startLabel : `${startLabel} – ${endLabel}`;
 }
 
+// "Others" in the Activity dropdown: the person types what was done that day
+// and that text is what gets saved as the activity.
+const OTHER_ACTIVITY = "__other__";
+
+// One form for everything: a single visit date, a weekly rotation (the
+// "Repeat every week" checkbox), and editing either of them.
 const emptyForm = {
   barangay_name: "",
   visit_date: "",
   time_range: "",
-  services: "",
+  activityChoice: "",
+  otherText: "",
   dentist: "",
   location: "",
   target: "",
   status: "Upcoming",
   notes: "",
+  barangays_served: [], // barangays that can attend (chips)
+  repeat: false,
+  day_of_week: "1",
 };
 
-const emptyRecurringForm = {
-  barangay_name: "",
-  day_of_week: "1",
-  dentist: "",
-  services: "",
-  time_range: "",
-  location: "",
-  target: "",
-  notes: "",
-};
+function splitServed(value) {
+  return String(value || "")
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
+
+// Saved activity text -> Activity dropdown + "Others" box.
+function activityFields(services) {
+  if (!services) return { activityChoice: "", otherText: "" };
+  if (ACTIVITY_OPTIONS.includes(services)) return { activityChoice: services, otherText: "" };
+  return { activityChoice: OTHER_ACTIVITY, otherText: services };
+}
+
+const INPUT_CLASS = "w-full rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm";
+
+// Small label above a form field.
+function Field({ label, hint, className = "", children }) {
+  return (
+    <div className={className}>
+      <span className="block text-xs font-semibold text-forest-800 mb-1">{label}</span>
+      {children}
+      {hint && <span className="block text-[11px] text-forest-500 mt-1">{hint}</span>}
+    </div>
+  );
+}
 
 // Dropdown options for the Edit forms: always includes the value the row
 // already has (even if it isn't in the standard list, e.g. older free-typed
@@ -139,9 +167,6 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
   const [actionError, setActionError] = useState("");
 
   const [recurringRules, setRecurringRules] = useState([]);
-  const [showRecurringForm, setShowRecurringForm] = useState(false);
-  const [recurringForm, setRecurringForm] = useState(emptyRecurringForm);
-  const [recurringError, setRecurringError] = useState("");
 
   // Filters for the Schedule table (all optional; "" = no filter).
   const [filters, setFilters] = useState(EMPTY_FILTERS);
@@ -214,6 +239,7 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
 
   function openAddSchedule() {
     setEditingScheduleId(null);
+    setEditingRuleId(null);
     setForm(emptyForm);
     setError("");
     setShowForm(true);
@@ -223,33 +249,105 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
   // pre-filled with that row's details.
   function openEditSchedule(s) {
     setEditingScheduleId(s.id);
+    setEditingRuleId(null);
     setForm({
+      ...emptyForm,
       barangay_name: s.barangay_name || "",
       visit_date: s.visit_date || "",
       time_range: s.time_range || "",
-      services: s.services || "",
+      ...activityFields(s.services),
       dentist: s.dentist || "",
       location: s.location || "",
       target: s.target ?? "",
       status: s.status || "Upcoming",
       notes: s.notes || "",
+      barangays_served: splitServed(s.barangays_served),
     });
     setError("");
     setShowForm(true);
   }
 
+  // "Edit" button on a weekly rotation: the same form, in weekly mode.
+  function openEditRule(r) {
+    setEditingRuleId(r.id);
+    setEditingScheduleId(null);
+    setForm({
+      ...emptyForm,
+      barangay_name: r.barangay_name || "",
+      time_range: r.time_range || "",
+      ...activityFields(r.services),
+      dentist: r.dentist || "",
+      location: r.location || "",
+      target: r.target ?? "",
+      notes: r.notes || "",
+      barangays_served: splitServed(r.barangays_served),
+      repeat: true,
+      day_of_week: String(r.day_of_week ?? 1),
+    });
+    setError("");
+    setShowForm(true);
+  }
+
+  // Choosing a barangay that has a health station (BHS) fills in what goes with
+  // it — the place, the barangays that can attend, the day (weekly rotation)
+  // and the dentist when we can tell who it is. Anything already typed by hand
+  // is left alone. "City Dental Office" means the services are done at the clinic.
+  function chooseBarangay(name) {
+    setForm((f) => {
+      const prev = stationForHost(f.barangay_name, f.dentist);
+      const next = stationForHost(name, f.dentist);
+      const sameList = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+      const out = { ...f, barangay_name: name };
+
+      if (name === CITY_DENTAL_OFFICE) {
+        return { ...out, location: CITY_DENTAL_OFFICE, barangays_served: [] };
+      }
+      // Coming back from the clinic option: forget its auto-filled place.
+      if (f.barangay_name === CITY_DENTAL_OFFICE && f.location === CITY_DENTAL_OFFICE) out.location = "";
+      if (!next) return out;
+
+      if (!out.location || (prev && out.location === prev.name)) out.location = next.name;
+      if (!out.barangays_served.length || (prev && sameList(out.barangays_served, prev.barangays))) {
+        out.barangays_served = [...next.barangays];
+      }
+      if (out.repeat && next.day != null) out.day_of_week = String(next.day);
+      if (!out.dentist) out.dentist = staffNameFor(next, dentists);
+      return out;
+    });
+  }
+
   async function saveSchedule(e) {
     e.preventDefault();
     setError("");
-    const body = { ...form, target: form.target === "" ? null : form.target };
+    const services = form.activityChoice === OTHER_ACTIVITY ? form.otherText.trim() : form.activityChoice;
+    if (form.activityChoice === OTHER_ACTIVITY && !services) {
+      setError("Please type the activity under “Others”.");
+      return;
+    }
+    const common = {
+      barangay_name: form.barangay_name,
+      time_range: form.time_range,
+      services,
+      location: form.location,
+      dentist: form.dentist,
+      target: form.target === "" ? null : form.target,
+      notes: form.notes,
+      barangays_served: form.barangays_served,
+    };
     try {
-      if (editingScheduleId) {
-        await api.patch(`/barangay-schedule/${editingScheduleId}`, body);
+      if (editingRuleId) {
+        await api.patch(`/recurring-schedule/${editingRuleId}`, { ...common, day_of_week: Number(form.day_of_week) });
+      } else if (editingScheduleId) {
+        await api.patch(`/barangay-schedule/${editingScheduleId}`, { ...common, visit_date: form.visit_date, status: form.status });
+      } else if (form.repeat) {
+        // Weekly rotation: the schedule dates are filled in automatically.
+        await api.post("/recurring-schedule", { ...common, day_of_week: Number(form.day_of_week) });
       } else {
-        await api.post("/barangay-schedule", body);
+        await api.post("/barangay-schedule", { ...common, visit_date: form.visit_date, status: form.status });
       }
       setForm(emptyForm);
       setEditingScheduleId(null);
+      setEditingRuleId(null);
       setShowForm(false);
       load();
     } catch (err) {
@@ -278,54 +376,6 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
       load();
     } catch (err) {
       setActionError(err.message || "Could not remove that schedule entry.");
-    }
-  }
-
-  function openAddRule() {
-    setEditingRuleId(null);
-    setRecurringForm(emptyRecurringForm);
-    setRecurringError("");
-    setShowRecurringForm(true);
-  }
-
-  // "Edit" button on a weekly rotation: same form as "Set up weekly rotation",
-  // pre-filled with that rotation's details.
-  function openEditRule(r) {
-    setEditingRuleId(r.id);
-    setRecurringForm({
-      barangay_name: r.barangay_name || "",
-      day_of_week: String(r.day_of_week ?? 1),
-      dentist: r.dentist || "",
-      services: r.services || "",
-      time_range: r.time_range || "",
-      location: r.location || "",
-      target: r.target ?? "",
-      notes: r.notes || "",
-    });
-    setRecurringError("");
-    setShowRecurringForm(true);
-  }
-
-  async function saveRecurringRule(e) {
-    e.preventDefault();
-    setRecurringError("");
-    const body = {
-      ...recurringForm,
-      day_of_week: Number(recurringForm.day_of_week),
-      target: recurringForm.target === "" ? null : recurringForm.target,
-    };
-    try {
-      if (editingRuleId) {
-        await api.patch(`/recurring-schedule/${editingRuleId}`, body);
-      } else {
-        await api.post("/recurring-schedule", body);
-      }
-      setRecurringForm(emptyRecurringForm);
-      setEditingRuleId(null);
-      setShowRecurringForm(false);
-      load();
-    } catch (err) {
-      setRecurringError(err.message || "Could not save that rotation.");
     }
   }
 
@@ -463,12 +513,6 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={openAddRule}
-            className="flex items-center gap-2 bg-cream-100 border border-brand-900 text-forest-900 text-sm font-semibold rounded-full px-5 py-2.5 hover:bg-cream-200"
-          >
-            🔁 Set up weekly rotation
-          </button>
-          <button
             onClick={openAddSchedule}
             className="flex items-center gap-2 bg-brand-900 text-brand-50 text-sm font-semibold rounded-full px-5 py-2.5 hover:bg-brand-800"
           >
@@ -485,72 +529,6 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
       </div>
     </div>
     </fieldset>
-
-      {/* Priority Barangays: sits above Weekly rotations as a grid of square
-          boxes. It lives OUTSIDE the read-only fieldset on purpose so doctors
-          can still use the search box. */}
-      <div className="mt-6">
-      <Card>
-        <div className="flex items-center gap-4 flex-wrap">
-          <div className="min-w-0">
-            <h3 className="font-display text-lg font-bold text-forest-950">Priority Barangays</h3>
-            <p className="text-xs text-forest-700 mt-0.5">
-              {notYetVisited.length === 0
-                ? "Zero entries this reporting month"
-                : prioritySearch.trim()
-                ? `${visiblePriority.length} of ${notYetVisited.length} entries`
-                : `${notYetVisited.length} ${notYetVisited.length === 1 ? "entry" : "entries"} this reporting month`}
-            </p>
-          </div>
-          {priorityOpen && notYetVisited.length > 0 && (
-            <input
-              type="search"
-              value={prioritySearch}
-              onChange={(e) => setPrioritySearch(e.target.value)}
-              placeholder="Search barangay"
-              aria-label="Search priority barangays"
-              className="rounded-full bg-cream-100 border border-cream-300 text-forest-950 text-xs px-3 py-1.5 w-40 focus:outline-none focus:border-forest-700"
-            />
-          )}
-          <button
-            type="button"
-            onClick={() => setPriorityOpen((v) => !v)}
-            aria-expanded={priorityOpen}
-            className="ml-auto text-xs font-semibold rounded-full bg-cream-100 border border-cream-200 text-forest-900 hover:bg-cream-200 px-3 py-1"
-          >
-            {priorityOpen ? "Hide" : "Show"} <span aria-hidden="true">{priorityOpen ? "▴" : "▾"}</span>
-          </button>
-        </div>
-
-        {priorityOpen && (
-        <div className="mt-4 max-h-[440px] overflow-y-auto pr-1">
-          {visiblePriority.length ? (
-            <div
-              className="grid gap-2"
-              style={{ gridTemplateColumns: "repeat(auto-fill, minmax(88px, 1fr))" }}
-            >
-              {visiblePriority.map((name) => (
-                <div
-                  key={name}
-                  className="aspect-square flex flex-col items-center justify-center text-center gap-0.5 rounded-lg border border-cream-200 bg-cream-50 p-1"
-                >
-                  <span className="text-xs leading-none text-forest-700">📍</span>
-                  <span className="font-semibold text-[11px] leading-tight text-forest-950">{name}</span>
-                  <span className="text-[10px] leading-none text-forest-700">
-                    {populationByBarangay[name] ? `Pop. ${populationByBarangay[name]}` : "Pop. —"}
-                  </span>
-                </div>
-              ))}
-            </div>
-          ) : notYetVisited.length ? (
-            <EmptyState>No barangay matches that search.</EmptyState>
-          ) : (
-            <EmptyState>Every barangay has at least one entry on the schedule.</EmptyState>
-          )}
-        </div>
-        )}
-      </Card>
-      </div>
 
       {recurringRules.length > 0 && (
         <fieldset disabled={readOnly} style={{ display: "contents" }}>
@@ -585,11 +563,16 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
               >
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-forest-950">
-                    Every {DAY_NAMES[r.day_of_week]} · {r.barangay_name}
+                    Every {DAY_NAMES[r.day_of_week]} · {r.location || r.barangay_name}
                   </p>
                   <p className="text-xs text-forest-700 truncate">
                     {[r.dentist, r.services, r.time_range].filter(Boolean).join(" · ") || "No details set"}
                   </p>
+                  {splitServed(r.barangays_served).length > 0 && (
+                    <p className="text-[11px] text-forest-500 truncate" title={splitServed(r.barangays_served).join(", ")}>
+                      Barangays: {splitServed(r.barangays_served).join(", ")}
+                    </p>
+                  )}
                   <EditedBy row={r} />
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
@@ -828,6 +811,14 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
                           value={s.barangay_name}
                           onSave={(v) => updateSchedule(s.id, "barangay_name", v)}
                         />
+                        {s.location && s.location !== s.barangay_name && (
+                          <p className="text-[10px] text-forest-500 pl-2">📍 {s.location}</p>
+                        )}
+                        {splitServed(s.barangays_served).length > 1 && (
+                          <p className="text-[10px] text-forest-500 pl-2" title={splitServed(s.barangays_served).join(", ")}>
+                            {splitServed(s.barangays_served).length} barangays can attend
+                          </p>
+                        )}
                         {s.recurring_rule_id && (
                           <p className="text-[10px] text-forest-500 pl-2">🔁 Weekly</p>
                         )}
@@ -974,186 +965,186 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
       </div>
 
       <Modal isOpen={showForm} onClose={() => setShowForm(false)}>
-        <h3 className="font-display text-xl font-bold text-forest-950 mb-4">
-          {editingScheduleId ? "Edit barangay visit date" : "Add a barangay visit date"}
-        </h3>
-        {error && <p className="text-sm text-red-700 mb-3">{error}</p>}
-        <form onSubmit={saveSchedule} className="grid sm:grid-cols-2 gap-4">
-          <select
-            required
-            value={form.barangay_name}
-            onChange={(e) => setForm((f) => ({ ...f, barangay_name: e.target.value }))}
-            className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
-          >
-            <option value="">Select barangay…</option>
-            {withCurrent(TAYABAS_BARANGAYS, form.barangay_name).map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-          <input
-            type="date"
-            required
-            value={form.visit_date}
-            onChange={(e) => setForm((f) => ({ ...f, visit_date: e.target.value }))}
-            className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
-          />
-          <input
-            placeholder="Time range (e.g. 8:00 AM - 12:00 PM)"
-            value={form.time_range}
-            onChange={(e) => setForm((f) => ({ ...f, time_range: e.target.value }))}
-            className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
-          />
-          <select
-            value={form.dentist}
-            onChange={(e) => setForm((f) => ({ ...f, dentist: e.target.value }))}
-            className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
-          >
-            <option value="">Select dentist…</option>
-            {withCurrent(dentists, form.dentist).map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-          <select
-            value={form.services}
-            onChange={(e) => setForm((f) => ({ ...f, services: e.target.value }))}
-            className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
-          >
-            <option value="">Select activity…</option>
-            {withCurrent(ACTIVITY_OPTIONS, form.services).map((activity) => (
-              <option key={activity} value={activity}>
-                {activity}
-              </option>
-            ))}
-          </select>
-          <input
-            type="number"
-            min="0"
-            placeholder="Target headcount"
-            value={form.target}
-            onChange={(e) => setForm((f) => ({ ...f, target: e.target.value }))}
-            className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
-          />
-          <select
-            value={form.status}
-            onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))}
-            className="sm:col-span-2 rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
-          >
-            {STATUS_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-          <input
-            placeholder="Location (e.g. Barangay Hall)"
-            value={form.location}
-            onChange={(e) => setForm((f) => ({ ...f, location: e.target.value }))}
-            className="sm:col-span-2 rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
-          />
-          <input
-            placeholder="Notes (optional)"
-            value={form.notes}
-            onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-            className="sm:col-span-2 rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
-          />
-          <button className="sm:col-span-2 bg-brand-900 text-brand-50 text-sm font-semibold rounded-full py-2.5 hover:bg-brand-800">
-            {editingScheduleId ? "Save changes" : "Post barangay date"}
-          </button>
-        </form>
-      </Modal>
-
-      <Modal isOpen={showRecurringForm} onClose={() => setShowRecurringForm(false)}>
         <h3 className="font-display text-xl font-bold text-forest-950 mb-1">
-          {editingRuleId ? "Edit weekly rotation" : "Set up a weekly rotation"}
-        </h3>
-        <p className="text-sm text-forest-700 mb-4">
           {editingRuleId
-            ? "Changes apply to dates the rotation adds from now on. Dates already on the schedule keep their own details — edit those individually."
-            : 'e.g. "Dr. Anthony Orias is in Camaysa every Monday" — new dates will appear on the schedule automatically, no need to re-post every week.'}
-        </p>
-        {recurringError && <p className="text-sm text-red-700 mb-3">{recurringError}</p>}
-        <form onSubmit={saveRecurringRule} className="grid sm:grid-cols-2 gap-4">
-          <select
-            required
-            value={recurringForm.barangay_name}
-            onChange={(e) => setRecurringForm((f) => ({ ...f, barangay_name: e.target.value }))}
-            className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
-          >
-            <option value="">Select barangay…</option>
-            {withCurrent(TAYABAS_BARANGAYS, recurringForm.barangay_name).map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-          <select
-            required
-            value={recurringForm.day_of_week}
-            onChange={(e) => setRecurringForm((f) => ({ ...f, day_of_week: e.target.value }))}
-            className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
-          >
-            {DAY_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                Every {o.label}
-              </option>
-            ))}
-          </select>
-          <select
-            value={recurringForm.dentist}
-            onChange={(e) => setRecurringForm((f) => ({ ...f, dentist: e.target.value }))}
-            className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
-          >
-            <option value="">Select dentist…</option>
-            {withCurrent(dentists, recurringForm.dentist).map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-          <input
-            placeholder="Time range (e.g. 8:00 AM - 12:00 PM)"
-            value={recurringForm.time_range}
-            onChange={(e) => setRecurringForm((f) => ({ ...f, time_range: e.target.value }))}
-            className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
-          />
-          <select
-            value={recurringForm.services}
-            onChange={(e) => setRecurringForm((f) => ({ ...f, services: e.target.value }))}
-            className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
-          >
-            <option value="">Select activity…</option>
-            {withCurrent(ROTATION_ACTIVITY_OPTIONS, recurringForm.services).map((activity) => (
-              <option key={activity} value={activity}>
-                {activity}
-              </option>
-            ))}
-          </select>
-          <input
-            type="number"
-            min="0"
-            placeholder="Target headcount"
-            value={recurringForm.target}
-            onChange={(e) => setRecurringForm((f) => ({ ...f, target: e.target.value }))}
-            className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
-          />
-          <input
-            placeholder="Location (e.g. Barangay Hall)"
-            value={recurringForm.location}
-            onChange={(e) => setRecurringForm((f) => ({ ...f, location: e.target.value }))}
-            className="sm:col-span-2 rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
-          />
-          <input
-            placeholder="Notes (optional)"
-            value={recurringForm.notes}
-            onChange={(e) => setRecurringForm((f) => ({ ...f, notes: e.target.value }))}
-            className="sm:col-span-2 rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
-          />
+            ? "Edit weekly rotation"
+            : editingScheduleId
+            ? "Edit barangay visit date"
+            : form.repeat
+            ? "Set up a weekly rotation"
+            : "Add a barangay visit date"}
+        </h3>
+        {editingRuleId && (
+          <p className="text-sm text-forest-700 mb-3">
+            Changes apply to dates the rotation adds from now on. Dates already on the schedule keep their own details — edit those
+            individually.
+          </p>
+        )}
+        {error && <p className="text-sm text-red-700 mb-3">{error}</p>}
+        <form onSubmit={saveSchedule} className="grid sm:grid-cols-2 gap-4 mt-3">
+          {!editingScheduleId && !editingRuleId && (
+            <label className="sm:col-span-2 flex items-start gap-2 text-sm text-forest-900">
+              <input
+                type="checkbox"
+                checked={form.repeat}
+                onChange={(e) => setForm((f) => ({ ...f, repeat: e.target.checked }))}
+                className="mt-0.5"
+              />
+              <span>
+                🔁 Repeat every week (weekly rotation)
+                {form.repeat && (
+                  <span className="block text-xs text-forest-700">
+                    New dates will appear on the schedule automatically — no need to re-post every week.
+                  </span>
+                )}
+              </span>
+            </label>
+          )}
+
+          <Field label="Barangay (where it is held)">
+            <select required value={form.barangay_name} onChange={(e) => chooseBarangay(e.target.value)} className={INPUT_CLASS}>
+              <option value="">Select barangay…</option>
+              {withCurrent([CITY_DENTAL_OFFICE, ...TAYABAS_BARANGAYS], form.barangay_name).map((name) => (
+                <option key={name} value={name}>
+                  {name === CITY_DENTAL_OFFICE ? "City Dental Office (services at the clinic)" : name}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label={form.repeat ? "Day" : "Date"}>
+            {form.repeat ? (
+              <select
+                required
+                value={form.day_of_week}
+                onChange={(e) => setForm((f) => ({ ...f, day_of_week: e.target.value }))}
+                className={INPUT_CLASS}
+              >
+                {DAY_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    Every {o.label}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="date"
+                required
+                value={form.visit_date}
+                onChange={(e) => setForm((f) => ({ ...f, visit_date: e.target.value }))}
+                className={INPUT_CLASS}
+              />
+            )}
+          </Field>
+
+          {form.barangay_name === CITY_DENTAL_OFFICE && (
+            <p className="sm:col-span-2 rounded-lg bg-cream-100 border border-cream-200 px-3 py-2 text-xs text-forest-800">
+              🦷 Done at the City Dental Office, where the clinic equipment is. Patients from any barangay can come.
+            </p>
+          )}
+
+          <Field label="Time">
+            <input
+              placeholder="e.g. 8:00 AM - 12:00 PM"
+              value={form.time_range}
+              onChange={(e) => setForm((f) => ({ ...f, time_range: e.target.value }))}
+              className={INPUT_CLASS}
+            />
+          </Field>
+          <Field label="Dentist">
+            <select value={form.dentist} onChange={(e) => setForm((f) => ({ ...f, dentist: e.target.value }))} className={INPUT_CLASS}>
+              <option value="">Select dentist…</option>
+              {withCurrent(dentists, form.dentist).map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Activity">
+            <select
+              value={form.activityChoice}
+              onChange={(e) => setForm((f) => ({ ...f, activityChoice: e.target.value }))}
+              className={INPUT_CLASS}
+            >
+              <option value="">Select activity…</option>
+              {withCurrent(
+                form.repeat && form.barangay_name !== CITY_DENTAL_OFFICE ? ROTATION_ACTIVITY_OPTIONS : ACTIVITY_OPTIONS,
+                form.activityChoice === OTHER_ACTIVITY ? "" : form.activityChoice
+              ).map((activity) => (
+                <option key={activity} value={activity}>
+                  {activity}
+                </option>
+              ))}
+              <option value={OTHER_ACTIVITY}>Others (specify)…</option>
+            </select>
+          </Field>
+          <Field label="Target headcount">
+            <input
+              type="number"
+              min="0"
+              placeholder="e.g. 30"
+              value={form.target}
+              onChange={(e) => setForm((f) => ({ ...f, target: e.target.value }))}
+              className={INPUT_CLASS}
+            />
+          </Field>
+          {form.activityChoice === OTHER_ACTIVITY && (
+            <Field label="Specify the activity" className="sm:col-span-2">
+              <input
+                required
+                autoFocus
+                placeholder="What was done that day? (e.g. Oral prophylaxis, Fluoride application)"
+                value={form.otherText}
+                onChange={(e) => setForm((f) => ({ ...f, otherText: e.target.value }))}
+                className={INPUT_CLASS}
+              />
+            </Field>
+          )}
+
+          {!form.repeat && (
+            <Field label="Status" className="sm:col-span-2">
+              <select value={form.status} onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))} className={INPUT_CLASS}>
+                {STATUS_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
+
+          <Field label="Place / location" className="sm:col-span-2">
+            <input
+              placeholder="e.g. BHS Camaysa, Barangay Hall"
+              value={form.location}
+              onChange={(e) => setForm((f) => ({ ...f, location: e.target.value }))}
+              className={INPUT_CLASS}
+            />
+          </Field>
+
+          {form.barangay_name !== CITY_DENTAL_OFFICE && (
+            <Field
+              label="Barangays that can attend"
+              className="sm:col-span-2"
+              hint="Patients can still go to any scheduled station — this lists who it is meant for. Type to search; optional."
+            >
+              <BarangayMultiSelect value={form.barangays_served} onChange={(list) => setForm((f) => ({ ...f, barangays_served: list }))} />
+            </Field>
+          )}
+
+          <Field label="Notes" className="sm:col-span-2">
+            <input
+              placeholder="Optional"
+              value={form.notes}
+              onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+              className={INPUT_CLASS}
+            />
+          </Field>
+
           <button className="sm:col-span-2 bg-brand-900 text-brand-50 text-sm font-semibold rounded-full py-2.5 hover:bg-brand-800">
-            {editingRuleId ? "Save changes" : "Save rotation"}
+            {editingRuleId || editingScheduleId ? "Save changes" : form.repeat ? "Save weekly rotation" : "Post barangay date"}
           </button>
         </form>
       </Modal>

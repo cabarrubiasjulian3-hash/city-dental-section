@@ -3,6 +3,7 @@ import db from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { archiveScheduleEntry, archivedScheduleKeys } from "../lib/archive.js";
 import { stampEdit } from "../lib/editStamp.js";
+import { normalizeServed } from "../lib/barangaysServed.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -27,8 +28,8 @@ function generateFromRecurringRules() {
 
   const insert = db.prepare(
     `INSERT INTO barangay_schedule
-       (barangay_name, visit_date, time_range, services, location, dentist, notes, target, status, recurring_rule_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Upcoming', ?)`
+       (barangay_name, visit_date, time_range, services, location, dentist, notes, target, status, recurring_rule_id, barangays_served)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Upcoming', ?, ?)`
   );
 
   const today = new Date();
@@ -51,7 +52,8 @@ function generateFromRecurringRules() {
         rule.dentist || null,
         rule.notes || null,
         rule.target,
-        rule.id
+        rule.id,
+        rule.barangays_served || null
       );
       existing.add(key);
     }
@@ -69,7 +71,7 @@ const STATUS_VALUES = ["Upcoming", "Ongoing", "Completed", "Not Completed"];
 
 // Admin or doctor: post a new barangay mission date
 router.post("/", requireRole("admin", "doctor"), (req, res) => {
-  const { barangay_name, visit_date, time_range, services, location, dentist, notes, target, status } = req.body;
+  const { barangay_name, visit_date, time_range, services, location, dentist, notes, target, status, barangays_served } = req.body;
   if (!barangay_name || !visit_date) {
     return res.status(400).json({ error: "barangay_name and visit_date are required." });
   }
@@ -77,8 +79,8 @@ router.post("/", requireRole("admin", "doctor"), (req, res) => {
   const safeTarget = target === "" || target === undefined || target === null ? null : Math.max(0, Math.round(Number(target)) || 0);
   const info = db
     .prepare(
-      `INSERT INTO barangay_schedule (barangay_name, visit_date, time_range, services, location, dentist, notes, target, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO barangay_schedule (barangay_name, visit_date, time_range, services, location, dentist, notes, target, status, barangays_served)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       barangay_name,
@@ -89,7 +91,8 @@ router.post("/", requireRole("admin", "doctor"), (req, res) => {
       dentist || null,
       notes || null,
       safeTarget,
-      safeStatus
+      safeStatus,
+      normalizeServed(barangays_served) ?? null
     );
   stampEdit("barangay_schedule", info.lastInsertRowid, req.user);
   const row = db.prepare("SELECT * FROM barangay_schedule WHERE id = ?").get(info.lastInsertRowid);
@@ -106,7 +109,7 @@ router.patch("/:id", requireRole("admin", "doctor"), (req, res) => {
   const existing = db.prepare("SELECT * FROM barangay_schedule WHERE id = ?").get(req.params.id);
   if (!existing) return res.status(404).json({ error: "Schedule entry not found." });
 
-  const { barangay_name, visit_date, time_range, services, location, dentist, notes, target, status } = req.body;
+  const { barangay_name, visit_date, time_range, services, location, dentist, notes, target, status, barangays_served } = req.body;
   if (status !== undefined && !STATUS_VALUES.includes(status)) {
     return res.status(400).json({ error: `status must be one of: ${STATUS_VALUES.join(", ")}` });
   }
@@ -116,7 +119,7 @@ router.patch("/:id", requireRole("admin", "doctor"), (req, res) => {
   db.prepare(
     `UPDATE barangay_schedule SET
        barangay_name = ?, visit_date = ?, time_range = ?, services = ?,
-       location = ?, dentist = ?, notes = ?, target = ?, status = ?
+       location = ?, dentist = ?, notes = ?, target = ?, status = ?, barangays_served = ?
      WHERE id = ?`
   ).run(
     String(barangay_name ?? "").trim() || existing.barangay_name,
@@ -128,6 +131,7 @@ router.patch("/:id", requireRole("admin", "doctor"), (req, res) => {
     optional(notes, existing.notes),
     target === undefined ? existing.target : target === "" || target === null ? null : Math.max(0, Math.round(Number(target)) || 0),
     status || existing.status,
+    barangays_served === undefined ? existing.barangays_served : normalizeServed(barangays_served),
     existing.id
   );
   stampEdit("barangay_schedule", existing.id, req.user);

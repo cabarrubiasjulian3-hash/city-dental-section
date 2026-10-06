@@ -3,6 +3,7 @@ import db from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { archiveRotation } from "../lib/archive.js";
 import { stampEdit } from "../lib/editStamp.js";
+import { normalizeServed } from "../lib/barangaysServed.js";
 
 const router = Router();
 // Admin AND doctor: the Doctor Portal's Barangay Schedule page is not
@@ -18,7 +19,7 @@ router.get("/", (req, res) => {
 
 // POST /api/recurring-schedule — e.g. { barangay_name: "Camaysa", day_of_week: 1, dentist: "Dr. Anthony Orias" }
 router.post("/", (req, res) => {
-  const { barangay_name, day_of_week, dentist, services, time_range, location, target, notes } = req.body;
+  const { barangay_name, day_of_week, dentist, services, time_range, location, target, notes, barangays_served } = req.body;
   if (!barangay_name || day_of_week === undefined || day_of_week === null) {
     return res.status(400).json({ error: "barangay_name and day_of_week are required." });
   }
@@ -29,10 +30,10 @@ router.post("/", (req, res) => {
   const safeTarget = target === "" || target === undefined || target === null ? null : Math.max(0, Math.round(Number(target)) || 0);
   const info = db
     .prepare(
-      `INSERT INTO recurring_barangay_schedule (barangay_name, day_of_week, dentist, services, time_range, location, target, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO recurring_barangay_schedule (barangay_name, day_of_week, dentist, services, time_range, location, target, notes, barangays_served)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(barangay_name, dow, dentist || null, services || null, time_range || null, location || null, safeTarget, notes || null);
+    .run(barangay_name, dow, dentist || null, services || null, time_range || null, location || null, safeTarget, notes || null, normalizeServed(barangays_served) ?? null);
   stampEdit("recurring_barangay_schedule", info.lastInsertRowid, req.user);
   const row = db.prepare(`SELECT * FROM recurring_barangay_schedule WHERE id = ?`).get(info.lastInsertRowid);
   res.status(201).json(row);
@@ -46,7 +47,7 @@ router.patch("/:id", (req, res) => {
   const existing = db.prepare(`SELECT * FROM recurring_barangay_schedule WHERE id = ?`).get(req.params.id);
   if (!existing) return res.status(404).json({ error: "Rotation rule not found." });
 
-  const { barangay_name, day_of_week, dentist, services, time_range, location, target, notes, active } = req.body;
+  const { barangay_name, day_of_week, dentist, services, time_range, location, target, notes, active, barangays_served } = req.body;
 
   let dow = existing.day_of_week;
   if (day_of_week !== undefined && day_of_week !== null && day_of_week !== "") {
@@ -60,7 +61,7 @@ router.patch("/:id", (req, res) => {
   db.prepare(
     `UPDATE recurring_barangay_schedule SET
        barangay_name = ?, day_of_week = ?, dentist = ?, services = ?,
-       time_range = ?, location = ?, target = ?, notes = ?, active = ?
+       time_range = ?, location = ?, target = ?, notes = ?, active = ?, barangays_served = ?
      WHERE id = ?`
   ).run(
     String(barangay_name ?? "").trim() || existing.barangay_name,
@@ -72,6 +73,7 @@ router.patch("/:id", (req, res) => {
     target === undefined ? existing.target : target === "" || target === null ? null : Math.max(0, Math.round(Number(target)) || 0),
     optional(notes, existing.notes),
     active === undefined ? existing.active : active ? 1 : 0,
+    barangays_served === undefined ? existing.barangays_served : normalizeServed(barangays_served),
     existing.id
   );
   stampEdit("recurring_barangay_schedule", existing.id, req.user);
