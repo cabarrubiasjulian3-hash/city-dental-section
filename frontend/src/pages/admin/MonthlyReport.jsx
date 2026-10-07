@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Printer, Download } from "lucide-react";
 import { api } from "../../lib/api";
 import { Card, EmptyState } from "../../components/ui";
-import EditableCell from "../../components/EditableCell";
+import { exportOfficialForm } from "./exportOfficialForm";
+import { PRINT_SPEC as SPEC } from "./printSpec"; // every print / export size lives in printSpec.js
 
 // Same category columns, same order, as the paper e-FHSIS form. "pregnant"
 // only has an "f" sex because the paper form only has a female column for
@@ -92,79 +93,6 @@ function sumRows(rows, groups = CATEGORY_GROUPS, filtered = false) {
   return t;
 }
 
-function GroupHeaderRows({ groups }) {
-  return (
-    <>
-      <tr>
-        <th className="px-2 py-1 text-left sticky left-0 bg-brand-900" rowSpan={2}>
-          &nbsp;
-        </th>
-        {groups.map((g) => (
-          <th key={g.key} colSpan={g.sexes.length} className="px-2 py-1 text-center border-l border-forest-700 align-bottom">
-            {g.label}
-          </th>
-        ))}
-        <th className="px-2 py-1 text-center border-l border-forest-700" rowSpan={2}>
-          Total
-        </th>
-      </tr>
-      <tr>
-        {groups.flatMap((g) =>
-          g.sexes.map((s) => (
-            <th key={`${g.key}_${s}`} className="px-1 py-1 text-center border-l border-forest-700 font-normal">
-              {s.toUpperCase()}
-            </th>
-          ))
-        )}
-      </tr>
-    </>
-  );
-}
-
-function EditableRow({ row, rowLabel, onSaveField, groups, filtered, editable = true }) {
-  return (
-    <tr className="border-t border-cream-200">
-      <td className="px-2 py-1.5 font-medium text-forest-950 sticky left-0 bg-cream-50 whitespace-nowrap">{rowLabel}</td>
-      {groups.flatMap((g) =>
-        g.sexes.map((s) => {
-          const field = `${g.key}_${s}`;
-          return (
-            <td key={field} className="px-1 py-1 border-l border-cream-200 text-center w-16">
-              {editable ? (
-                <EditableCell
-                  value={String(row[field] ?? 0)}
-                  type="number"
-                  onSave={(v) => onSaveField(row, field, v)}
-                  className="text-center"
-                />
-              ) : (
-                <span className="text-forest-700">{row[field] ?? 0}</span>
-              )}
-            </td>
-          );
-        })
-      )}
-      <td className="px-2 py-1.5 text-center border-l border-cream-200 font-semibold text-forest-950">{filtered ? rowTotal(row, groups) : row.total}</td>
-    </tr>
-  );
-}
-
-function TotalsRow({ label, totals, groups }) {
-  return (
-    <tr className="border-t-2 border-brand-900 bg-cream-200 font-semibold">
-      <td className="px-2 py-1.5 sticky left-0 bg-cream-200 whitespace-nowrap">{label}</td>
-      {groups.flatMap((g) =>
-        g.sexes.map((s) => (
-          <td key={`${g.key}_${s}`} className="px-1 py-1.5 border-l border-cream-300 text-center">
-            {totals[`${g.key}_${s}`]}
-          </td>
-        ))
-      )}
-      <td className="px-2 py-1.5 text-center border-l border-cream-300">{totals.total}</td>
-    </tr>
-  );
-}
-
 // What the single summary table is grouped by ("category" the rows are assigned to).
 const GROUP_BY = [
   { key: "age", label: "Age group", column: "Age group / Indicator" },
@@ -172,6 +100,25 @@ const GROUP_BY = [
   { key: "dentist", label: "Dentist assigned", column: "Dentist" },
   { key: "services", label: "Services", column: "Service" },
 ];
+
+// Options for the From / To month boxes ("01".."12" -> January..December).
+const MONTH_OPTIONS = Array.from({ length: 12 }, (_, i) => ({
+  value: String(i + 1).padStart(2, "0"),
+  label: new Date(2000, i, 1).toLocaleString("en-US", { month: "long" }),
+}));
+
+// From "07" to "10" in 2026 -> ["2026-07","2026-08","2026-09","2026-10"].
+// Leave "to" empty for just one month. If the two are the wrong way round they
+// are swapped, so "October to July" still works.
+function monthsBetween(from, to, year) {
+  const a = Number(from);
+  const b = to ? Number(to) : a;
+  const lo = Math.min(a, b);
+  const hi = Math.max(a, b);
+  return Array.from({ length: hi - lo + 1 }, (_, i) => `${year}-${String(lo + i).padStart(2, "0")}`);
+}
+
+const monthNameOf = (ym) => new Date(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)) - 1, 1).toLocaleString("en-US", { month: "long" }).toUpperCase();
 
 // Names are stored either with or without "Dr." — always show exactly one.
 const drName = (n) => `Dr. ${String(n).replace(/^dr\.?\s+/i, "")}`;
@@ -605,19 +552,813 @@ function SummaryChart({ rows, groupBy, title }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// The paper e-FHSIS forms. Which one gets drawn depends on the report picked:
+//   A  Consolidated Monthly (all dentists) and Monthly (one dentist, by
+//      activity): one row per dentist / activity with M and F columns.
+//   B  Quarterly / Annual / any From–To range (the "overall report"): a
+//      Male + Female row for every month, with the sex written inside each
+//      cell, one Sub total and one Over all total per month.
+//   C  Monthly by Barangay (the "City Dental Section" sheet): one row per
+//      barangay with its Projected Population and a Grand Total.
+// ---------------------------------------------------------------------------
+
+// Solid colours like the printed form: blue label column, orange figures,
+// lavender sub total, green overall total. Change them here if you want them
+// lighter or darker — every table below reads from this one list.
+const FORM_COLORS = {
+  line: "#1c261d", // table borders
+  ink: "#0f1a12", // text
+  label: "#7FB2E5", // first column (dentist / barangay / month)
+  data: "#F4B183", // the figure columns
+  sub: "#B5A8E6", // sub total
+  total: "#8CC665", // overall / grand total
+  plain: "#FFFFFF",
+};
+
+const POPULATION_YEAR = 2021; // the year printed on the Barangay form's "Projected Population" column
+// Left seal: uses tayabasLogoData.js (embedded copy) when that file sits next to this one,
+// otherwise falls back to /tayabaslogo.png in frontend/public. Right seal: frontend/public/logo.png.
+const embeddedSeal = Object.values(import.meta.glob("./tayabasLogoData.js", { eager: true }))[0]?.default;
+const SEAL_LEFT = embeddedSeal || "/tayabaslogo.png"; // City of Tayabas seal
+const SEAL_RIGHT = "/logo.png"; // City Dental Office seal
+// Names printed at the bottom of the form.
+const SIGNATORIES = {
+  preparedBy: { name: "CESAR ANTHONY ORIAS JR., DMD", title: "City Dentist III" },
+  notedBy: { name: "HERNANDO C. MARQUEZ, MD, MPH, MPM, DPAMS", title: "City Health Officer" },
+};
+
+const FORM_LABELS = {
+  orally_fit: "Orally fit children 12–59 mons old oral examination plus orally fit after rehabilitation",
+  dmft: "Clients 5 yrs old and above with cases of DMFT",
+  infants: "Infants 0–11 months old who received BOHC",
+  children_1_4: "Children 1–4 yrs old (12–59 mons) who received BOHC",
+  children_5_9: "Children 5–9 yrs old who received BOHC",
+  adol_10_14: "A. Adolescents 10–14 yrs old who received BOHC",
+  adol_15_19: "B. Adolescents 15–19 yrs old who received BOHC",
+  adults: "Adults 20–59 yrs old who received BOHC",
+  senior: "Senior citizens 60 yrs old and above who received BOHC",
+  pregnant: "Pregnant woman",
+};
+// Column titles on the Barangay sheet (they're worded a little differently).
+const BARANGAY_FORM_LABELS = {
+  ...FORM_LABELS,
+  orally_fit: "Orally Fit Children 12–59 mos old oral examination plus orally fit after rehabilitation",
+  children_1_4: "Children 1–4 yrs old (12–59 months) who received BOHC",
+  pregnant: "Preg. Women Provided with BOHC",
+  senior: "Senior Citizen 60 years and above provided with BOHC",
+};
+// The Barangay sheet puts Pregnant Women before Senior Citizens.
+const BARANGAY_ORDER = ["orally_fit", "dmft", "infants", "children_1_4", "children_5_9", "adol_10_14", "adol_15_19", "adults", "pregnant", "senior"];
+
+const isAdol = (g) => g.key.startsWith("adol_");
+const sexTotal = (t, groups, sex) =>
+  groups.reduce((sum, g) => sum + (g.sexes.includes(sex) ? t[`${g.key}_${sex}`] || 0 : 0), 0);
+
+const TH_BASE = "border px-2 py-2 text-center align-middle text-[11px] font-bold leading-tight";
+const TD_BASE = "border px-2 py-2 text-center";
+const TABLE_STYLE = { color: FORM_COLORS.ink, borderColor: FORM_COLORS.line };
+const cellStyle = (kind, extra) => ({ backgroundColor: FORM_COLORS[kind], borderColor: FORM_COLORS.line, ...extra });
+
+// kind = which colour of FORM_COLORS the cell gets.
+function Th({ kind, className = "", style, ...rest }) {
+  return <th {...rest} className={`${TH_BASE} ${className}`} style={cellStyle(kind, style)} />;
+}
+function Td({ kind, className = "", style, ...rest }) {
+  return <td {...rest} className={`${TD_BASE} ${className}`} style={cellStyle(kind, style)} />;
+}
+
+// Numbers get thousands commas (1,012). Zero cells are left blank, like the paper form.
+const fmt = (v) => Number(v).toLocaleString("en-US");
+const cellVal = (v) => (v ? fmt(v) : "");
+
+// Column widths for PRINTING only (the on-screen table is left as it was): every column gets
+// the same share, like the paper form. They are only hints (the table is NOT fixed-layout), so
+// if a word is too long for its column - "Pregnant", "Adolescents", "rehabilitation" - that
+// column widens by itself and the others give way. The width sits in a CSS variable that only
+// the print rules read. fixed = widths (in %) of the first columns, e.g. the name columns.
+function ColGroup({ count, fixed = [] }) {
+  const rest = (100 - fixed.reduce((a, b) => a + b, 0)) / (count - fixed.length);
+  return (
+    <colgroup>
+      {Array.from({ length: count }, (_, i) => (
+        <col key={i} style={{ "--w": `${i < fixed.length ? fixed[i] : rest}%` }} />
+      ))}
+    </colgroup>
+  );
+}
+const sexCount = (groups) => groups.reduce((n, g) => n + g.sexes.length, 0);
+
+// Header of forms A and B. mf = every age group gets an M and an F column (A);
+// otherwise one column per group (B, where the sex is written inside the cells).
+function FormHead({ groups, mf, lead }) {
+  const adol = groups.filter(isAdol);
+  const labelRows = adol.length ? 2 : 1;
+  const totalRows = labelRows + (mf ? 1 : 0);
+  const colsOf = (g) => (mf ? g.sexes.length : 1);
+  return (
+    <thead>
+      <tr>
+        <Th kind="label" rowSpan={totalRows}>{lead}</Th>
+        {groups.map((g) => {
+          if (isAdol(g)) {
+            if (g.key !== adol[0].key) return null;
+            return (
+              <Th key="adol" kind="data" colSpan={adol.reduce((sum, x) => sum + colsOf(x), 0)}>
+                Adolescents who received BOHC
+              </Th>
+            );
+          }
+          return (
+            <Th key={g.key} kind="data" rowSpan={labelRows} colSpan={colsOf(g)}>
+              {FORM_LABELS[g.key]}
+            </Th>
+          );
+        })}
+        {mf ? (
+          <>
+            <Th kind="sub" colSpan={2} rowSpan={labelRows}>Sub total</Th>
+            <Th kind="sub" rowSpan={totalRows}>Total</Th>
+            <Th kind="total" rowSpan={totalRows}>Overall total</Th>
+          </>
+        ) : (
+          <>
+            <Th kind="sub" rowSpan={totalRows}>Sub total</Th>
+            <Th kind="total" rowSpan={totalRows}>Over all total</Th>
+          </>
+        )}
+      </tr>
+      {adol.length > 0 && (
+        <tr>
+          {adol.map((g) => (
+            <Th key={g.key} kind="data" colSpan={colsOf(g)}>{FORM_LABELS[g.key]}</Th>
+          ))}
+        </tr>
+      )}
+      {mf && (
+        <tr>
+          {groups.flatMap((g) =>
+            g.sexes.map((x) => (
+              <Th key={`${g.key}_${x}`} kind="data">{x.toUpperCase()}</Th>
+            ))
+          )}
+          <Th kind="sub">M</Th>
+          <Th kind="sub">F</Th>
+        </tr>
+      )}
+    </thead>
+  );
+}
+
+// Form A: Consolidated Monthly (a row per dentist) and Monthly (a row per activity).
+function FormTableA({ groups, rows, lead }) {
+  const sums = rows.map((r) => {
+    const m = sexTotal(r.t, groups, "m");
+    const f = sexTotal(r.t, groups, "f");
+    return { m, f, total: m + f };
+  });
+  const overall = sums.reduce((sum, x) => sum + x.total, 0);
+  return (
+    <table className="w-full min-w-[1100px] border-collapse text-xs" style={TABLE_STYLE}>
+      <ColGroup count={sexCount(groups) + 5} fixed={SPEC.colFixed.A} />
+      <FormHead groups={groups} mf lead={lead} />
+      <tbody>
+        {rows.map((r, i) => (
+          <tr key={r.key}>
+            <Td kind="label" className="min-w-[9rem] max-w-[15rem] text-left font-bold">{r.label}</Td>
+            {groups.flatMap((g) =>
+              g.sexes.map((x) => (
+                <Td key={`${g.key}_${x}`} kind="data" className="font-semibold">{cellVal(r.t[`${g.key}_${x}`])}</Td>
+              ))
+            )}
+            <Td kind="sub" className="font-bold text-red-700">{cellVal(sums[i].m)}</Td>
+            <Td kind="sub" className="font-bold text-red-700">{cellVal(sums[i].f)}</Td>
+            <Td kind="sub" className="font-bold">{cellVal(sums[i].total)}</Td>
+            {i === 0 && <Td kind="total" rowSpan={rows.length} className="text-xl font-extrabold">{fmt(overall)}</Td>}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+// "MALE  15" on screen. When printing, the same cell becomes "MALE | 15": a label cell and a value
+// cell with a divider between them (the print: classes), like the paper Quarterly form.
+function SexCell({ sex, value, strong = false }) {
+  return (
+    <div className="flex items-center justify-between gap-2 print:items-stretch print:gap-0">
+      <span className="text-[9px] font-bold uppercase tracking-wide opacity-70 print:flex print:flex-1 print:items-center print:justify-center">
+        {sex === "m" ? "Male" : "Female"}
+      </span>
+      <span
+        className={`${strong ? "font-extrabold" : "font-bold"} print:flex print:w-[40%] print:items-center print:justify-center print:border-l`}
+        style={{ borderColor: FORM_COLORS.line }}
+      >
+        {cellVal(value)}
+      </span>
+    </div>
+  );
+}
+
+// Form B: the overall report (Quarterly / Annual / any From–To range).
+function FormTableB({ groups, months, sexRows }) {
+  const bySex = (t, x) => sexTotal(t, groups, x);
+  const monthTotal = (t) => sexRows.reduce((sum, y) => sum + bySex(t, y), 0);
+  const grand = months.reduce((sum, mo) => sum + monthTotal(mo.t), 0);
+  return (
+    <table className="w-full min-w-[1000px] border-collapse text-xs" style={TABLE_STYLE}>
+      <ColGroup count={groups.length + 3} />
+      <FormHead groups={groups} mf={false} lead="Month" />
+      <tbody>
+        {months.flatMap((mo) =>
+          sexRows.map((x, si) => (
+            <tr key={`${mo.key}-${x}`}>
+              {si === 0 && (
+                <Td kind="label" rowSpan={sexRows.length} className="text-left font-extrabold uppercase whitespace-nowrap">{mo.label}</Td>
+              )}
+              {groups.map((g) => {
+                // Pregnant women only have one (female) figure: one merged cell over both rows.
+                if (g.sexes.length === 1 && sexRows.length === 2) {
+                  return si === 0 ? (
+                    <Td key={g.key} kind="data" rowSpan={2} className="font-bold">{cellVal(mo.t[`${g.key}_${g.sexes[0]}`])}</Td>
+                  ) : null;
+                }
+                return (
+                  <Td key={g.key} kind="data" className="sexcell">
+                    <SexCell sex={x} value={g.sexes.includes(x) ? mo.t[`${g.key}_${x}`] : null} />
+                  </Td>
+                );
+              })}
+              <Td kind="sub" className="sexcell">
+                <SexCell sex={x} value={bySex(mo.t, x)} strong />
+              </Td>
+              {si === 0 && (
+                <Td kind="total" rowSpan={sexRows.length} className="text-base font-extrabold">{fmt(monthTotal(mo.t))}</Td>
+              )}
+            </tr>
+          ))
+        )}
+        <tr>
+          <Td kind="plain" colSpan={groups.length + 2} />
+          <Td kind="total" className="text-xl font-extrabold">{fmt(grand)}</Td>
+        </tr>
+      </tbody>
+    </table>
+  );
+}
+
+// Form C: the Barangay sheet (one row per barangay, Projected Population, Grand Total).
+function FormTableC({ groups, rows, monthLabel }) {
+  const rowSum = (t) => sexTotal(t, groups, "m") + sexTotal(t, groups, "f");
+  const colCount = groups.reduce((n, g) => n + g.sexes.length, 0) + 3;
+  const totals = emptyTotals();
+  let populationSum = 0;
+  let grand = 0;
+  for (const r of rows) {
+    for (const g of groups) for (const f of fieldsFor(g)) totals[f] += r.t[f] || 0;
+    populationSum += Number(r.population) || 0;
+    grand += rowSum(r.t);
+  }
+  const num = (v) => (v === null || v === undefined || v === "" ? "" : Number(v).toLocaleString("en-US"));
+  return (
+    <table className="w-full min-w-[1000px] border-collapse text-xs" style={TABLE_STYLE}>
+      <ColGroup count={sexCount(groups) + 3} fixed={SPEC.colFixed.C} />
+      <thead>
+        <tr>
+          <Th kind="label" colSpan={colCount} className="text-xs uppercase tracking-wide">{monthLabel}</Th>
+        </tr>
+        <tr>
+          <Th kind="label" rowSpan={2}>Barangay</Th>
+          <Th kind="label" rowSpan={2}>Projected Population {POPULATION_YEAR}</Th>
+          {groups.map((g) => (
+            <Th key={g.key} kind="data" colSpan={g.sexes.length}>{BARANGAY_FORM_LABELS[g.key]}</Th>
+          ))}
+          <Th kind="total" rowSpan={2}>Grand Total</Th>
+        </tr>
+        <tr>
+          {groups.flatMap((g) =>
+            g.sexes.map((x) => (
+              <Th key={`${g.key}_${x}`} kind="data">{x.toUpperCase()}</Th>
+            ))
+          )}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => (
+          <tr key={r.key}>
+            <Td kind="label" className="text-left font-bold whitespace-nowrap">{r.label}</Td>
+            <Td kind="label" className="text-right font-semibold">{num(r.population)}</Td>
+            {groups.flatMap((g) =>
+              g.sexes.map((x) => (
+                <Td key={`${g.key}_${x}`} kind="data" className="font-semibold">{cellVal(r.t[`${g.key}_${x}`])}</Td>
+              ))
+            )}
+            <Td kind="total" className="font-extrabold">{cellVal(rowSum(r.t))}</Td>
+          </tr>
+        ))}
+        <tr>
+          <Td kind="sub" className="text-left font-extrabold uppercase">Total</Td>
+          <Td kind="sub" className="text-right font-extrabold">{num(populationSum)}</Td>
+          {groups.flatMap((g) =>
+            g.sexes.map((x) => (
+              <Td key={`${g.key}_${x}`} kind="sub" className="font-extrabold">{cellVal(totals[`${g.key}_${x}`])}</Td>
+            ))
+          )}
+          <Td kind="total" className="text-base font-extrabold">{fmt(grand)}</Td>
+        </tr>
+      </tbody>
+    </table>
+  );
+}
+
+function Seal({ src, alt, style }) {
+  return (
+    <img
+      src={src}
+      alt={alt}
+      style={{ width: SPEC.seal.size, height: SPEC.seal.size, ...style }}
+      onError={(e) => {
+        e.currentTarget.style.visibility = "hidden"; // image missing: keep the layout, hide the icon
+      }}
+      className="hidden print:block object-contain"
+    />
+  );
+}
+
+// On screen only the office name and the report title show. When printing / exporting, the seals
+// and the "Republic of the Philippines" lines come back (the `hidden print:block` pieces) so the
+// paper copy has the full heading. Sizes for printing are the rep-* classes in PRINT_CSS below
+// (numbers in printSpec.js). Seals sit at the top, the same distance in from the left and right
+// edge of the table; the office name and the (wide) title are centred and may run under them.
+function FormTitle({ model }) {
+  return (
+    <div className="rep-header relative mb-3 text-forest-950">
+      <Seal src={SEAL_LEFT} alt="City of Tayabas seal" style={{ position: "absolute", top: 0, left: SPEC.seal.inset }} />
+      <Seal src={SEAL_RIGHT} alt="City Dental Office seal" style={{ position: "absolute", top: 0, right: SPEC.seal.inset }} />
+      <div className="text-center leading-snug">
+        {model.mode === "C" ? (
+          <>
+            <p className="rep-small hidden print:block">Tayabas City</p>
+            <p className="rep-sec-office text-sm font-semibold">City Dental Office</p>
+            <p className="rep-sec-title font-display text-lg font-bold tracking-wide">CITY DENTAL SECTION</p>
+          </>
+        ) : (
+          <>
+            <p className="rep-small hidden print:block">Republic of the Philippines</p>
+            <p className="rep-small hidden print:block">Province of Quezon</p>
+            <p className="rep-small hidden print:block">City of Tayabas</p>
+            <p className="rep-office font-display text-lg font-bold">City Dental Office</p>
+            <p className="rep-title text-sm font-semibold">
+              {model.title} <span className={model.underline ? "font-bold underline" : "rep-period font-bold"}>{model.period}</span>
+            </p>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Footer (printed copy only): "Prepared by:" at the left, "Noted by:" (overall report) or
+// "Submitted to:" further right. Names are centred under their label in regular type, titles under
+// them in bold. No signature is printed: raise footer.gap in printSpec.js to leave room to sign.
+function FormFooter({ noted }) {
+  const F = SPEC.footer;
+  const { preparedBy, notedBy } = SIGNATORIES;
+  return (
+    <div
+      className="hidden print:grid text-forest-950 break-inside-avoid"
+      style={{ gridTemplateColumns: `${F.leftColumn} 1fr`, marginTop: F.marginTop, fontSize: `${F.font}pt` }}
+    >
+      <div className="w-fit" style={{ paddingLeft: F.labelIndent }}>
+        <p>Prepared by:</p>
+        <div className="text-center" style={{ marginTop: F.gap, marginLeft: F.nameIndent }}>
+          <p className="whitespace-nowrap">{preparedBy.name}</p>
+          <p className="font-bold">{preparedBy.title}</p>
+        </div>
+      </div>
+      <div className="w-fit">
+        <p>{noted ? "Noted by:" : "Submitted to:"}</p>
+        <div className="text-center" style={{ marginTop: F.gap }}>
+          <p className="whitespace-nowrap">{notedBy.name}</p>
+          <p className="font-bold">{notedBy.title}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OfficialReport({ model, loading }) {
+  if (loading) return <EmptyState>Loading…</EmptyState>;
+  if (!model.groups.length) return <EmptyState>No columns to show for these filters.</EmptyState>;
+  const hasRows = model.mode === "B" ? model.months.length > 0 : model.rows.length > 0;
+  if (!hasRows) return <EmptyState>Nothing to show for these filters.</EmptyState>;
+  return (
+    <div data-form={model.mode} style={{ WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>
+      <FormTitle model={model} />
+      <div className="overflow-x-auto">
+        {model.mode === "A" && <FormTableA groups={model.groups} rows={model.rows} lead={model.lead} />}
+        {model.mode === "B" && <FormTableB groups={model.groups} months={model.months} sexRows={model.sexRows} />}
+        {model.mode === "C" && <FormTableC groups={model.groups} rows={model.rows} monthLabel={model.period} />}
+      </div>
+      <FormFooter noted={model.mode === "B"} />
+    </div>
+  );
+}
+
+// PRINT LAYOUT. Every number comes from printSpec.js (the Word export reads the same file, so
+// printing and exporting always match). Page margin is 0 on purpose: that is what makes
+// Chrome / Edge leave out their own date / title / web address / "1/1" text; the real margin is
+// the padding on #printable-monthly-report.
+const PR = "#printable-monthly-report";
+const PAD = SPEC.pagePad;
+const TW = SPEC.table.wide; // Quarterly (data-form B)
+const TN = SPEC.table.narrow; // Monthly + Barangay (data-form A and C)
+const HD = SPEC.header;
+const PRINT_CSS = `@media print {
+  @page { size: ${SPEC.pageSize}; margin: 0; }
+  ${PR} { width: 100%; box-sizing: border-box; padding: ${PAD.top} ${PAD.right} ${PAD.bottom} ${PAD.left}; font-family: ${SPEC.fontFamily}; }
+  ${PR} [data-form="A"] { padding-left: ${SPEC.sideInset.A}; padding-right: ${SPEC.sideInset.A}; }
+  ${PR} [data-form="B"] { padding-left: ${SPEC.sideInset.B}; padding-right: ${SPEC.sideInset.B}; }
+  ${PR} [data-form="C"] { padding-left: ${SPEC.sideInset.C}; padding-right: ${SPEC.sideInset.C}; }
+  ${PR} .font-display { font-family: inherit !important; }
+
+  /* heading */
+  ${PR} .rep-header { margin-bottom: ${HD.gapAfter} !important; }
+  ${PR} .rep-header p { line-height: ${HD.lineHeight} !important; }
+  ${PR} .rep-small { font-size: ${HD.small}pt !important; }
+  ${PR} .rep-office { font-size: ${HD.office}pt !important; font-weight: 600 !important; }
+  ${PR} .rep-title { font-size: ${HD.title}pt !important; font-weight: 400 !important; }
+  ${PR} .rep-period { font-weight: 400 !important; }
+  ${PR} .rep-sec-office { font-size: ${HD.sectionOffice}pt !important; }
+  ${PR} .rep-sec-title { font-size: ${HD.sectionTitle}pt !important; }
+
+  /* table: equal columns that still widen when a word does not fit */
+  ${PR} table { min-width: 0 !important; width: 100% !important; }
+  ${PR} col { width: var(--w); }
+  ${PR} th, ${PR} td { overflow-wrap: break-word; }
+  ${PR} .overflow-x-auto { overflow: visible !important; }
+  ${PR} tr { break-inside: avoid; }
+
+  /* Monthly + Barangay forms (many columns, smaller type) */
+  ${PR} th { padding: ${TN.thPad} !important; font-size: ${TN.th}pt !important; line-height: ${TN.thLine} !important; }
+  ${PR} td { padding: ${TN.tdPad} !important; font-size: ${TN.td}pt !important; }
+  ${PR} td span.uppercase { font-size: ${TN.tag}pt !important; letter-spacing: 0 !important; }
+  ${PR} td.sexcell { padding: 0 !important; }
+
+  /* Quarterly form (bigger type, tall header, taller rows) */
+  ${PR} [data-form="B"] th { padding: ${TW.thPad} !important; font-size: ${TW.th}pt !important; line-height: ${TW.thLine} !important; }
+  ${PR} [data-form="B"] thead tr:nth-child(2) th { height: ${TW.subHeaderHeight} !important; }
+  ${PR} [data-form="B"] td { padding: ${TW.tdPad} !important; font-size: ${TW.td}pt !important; line-height: ${TW.tdLine} !important; }
+  ${PR} [data-form="B"] td.sexcell { padding: 0 !important; }
+  ${PR} [data-form="B"] td span.uppercase { font-size: ${TW.tag}pt !important; }
+  ${PR} [data-form="B"] td.sexcell span { padding-top: ${TW.tagPadY} !important; padding-bottom: ${TW.tagPadY} !important; }
+
+  /* big totals */
+  ${PR} td[class*="text-base"] { font-size: ${SPEC.table.base}pt !important; }
+  ${PR} td[class*="text-xl"] { font-size: ${SPEC.table.xl}pt !important; }
+}`;
+
+// ---------------------------------------------------------------------------
+// Bottom of the page: the By Dentist / By Barangay tabs, the filters under them,
+// and the report laid out like the paper e-FHSIS form. It loads its own data, so
+// it never touches the filters or the report at the top of the page.
+// ---------------------------------------------------------------------------
+function ReportFormSection({ tab, setTab }) {
+  const nowYm = new Date().toISOString().slice(0, 7);
+  const [fromMonth, setFromMonth] = useState(nowYm.slice(5, 7)); // "01".."12"
+  const [toMonth, setToMonth] = useState(""); // "" = just the one month above
+  const [year, setYear] = useState(nowYm.slice(0, 4));
+  const [doctor, setDoctor] = useState("");
+  const [barangay, setBarangay] = useState("");
+  const [sex, setSex] = useState("all"); // "all" | "m" | "f"
+  const [ageKeys, setAgeKeys] = useState([]); // age group keys; [] = all
+  const [data, setData] = useState([]); // [{ month, dentistRows, barangayRows }]
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [exporting, setExporting] = useState(false);
+
+  const thisYear = new Date().getFullYear();
+  const yearOptions = Array.from({ length: 12 }, (_, i) => String(thisYear + 1 - i)).map((y) => ({ value: y, label: y }));
+  const months = useMemo(() => monthsBetween(fromMonth, toMonth, year), [fromMonth, toMonth, year]);
+  const multi = months.length > 1;
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    Promise.all(
+      months.map((m) =>
+        Promise.all([api.get(`/monthly-reports?month=${m}&scope=dentist`), api.get(`/monthly-reports?month=${m}&scope=barangay`)])
+      )
+    )
+      .then((results) => {
+        if (!cancelled) setData(results.map(([d, b], i) => ({ month: months[i], dentistRows: d.rows, barangayRows: b.rows })));
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [months]);
+
+  const doctorNames = useMemo(() => [...new Set(data.flatMap((md) => md.dentistRows.map((r) => r.scope_name)))], [data]);
+  const barangayNames = useMemo(() => [...new Set(data.flatMap((md) => md.barangayRows.map((r) => r.scope_name)))], [data]);
+
+  const groups = useMemo(
+    () =>
+      CATEGORY_GROUPS.map((g) => ({ ...g, sexes: g.sexes.filter((x) => sex === "all" || x === sex) })).filter(
+        (g) => g.sexes.length > 0 && (ageKeys.length === 0 || ageKeys.includes(g.key))
+      ),
+    [ageKeys, sex]
+  );
+  const filtered = ageKeys.length > 0 || sex !== "all";
+  const anyFilter = Boolean(doctor || barangay || filtered || toMonth);
+
+  const model = useMemo(() => {
+    const first = months[0];
+    const last = months[months.length - 1];
+    const period = multi ? `${monthNameOf(first)}-${monthNameOf(last)} ${year}` : `${monthNameOf(first)}-${year}`;
+    const base = { groups, period };
+    const rowsOf = (md) =>
+      tab === "dentist"
+        ? doctor ? md.dentistRows.filter((r) => r.scope_name === doctor) : md.dentistRows
+        : barangay ? md.barangayRows.filter((r) => r.scope_name === barangay) : md.barangayRows;
+
+    // Form B — the overall report: a Male/Female row pair for every month.
+    if (multi) {
+      const title =
+        months.length === 12
+          ? "Annual Report on Dental Services e-FHSIS –"
+          : months.length === 3
+          ? "Quarterly Report on Dental Services e-FHSIS –"
+          : "Report on Dental Services e-FHSIS –";
+      return {
+        ...base,
+        mode: "B",
+        title,
+        sexRows: sex === "all" ? ["m", "f"] : [sex],
+        months: data.map((md) => ({ key: md.month, label: monthNameOf(md.month), t: sumRows(rowsOf(md), groups, filtered) })),
+      };
+    }
+    const md = data[0];
+    if (!md) return { ...base, mode: "A", title: "", lead: "", rows: [] };
+
+    // Form C — the Barangay sheet. (No DMFT column on it, unless picked on purpose.)
+    if (tab === "barangay") {
+      const cGroups = groups
+        .filter((g) => ageKeys.length > 0 || g.key !== "dmft")
+        .sort((a, b) => BARANGAY_ORDER.indexOf(a.key) - BARANGAY_ORDER.indexOf(b.key));
+      return {
+        ...base,
+        mode: "C",
+        groups: cGroups,
+        period: `MONTH OF ${monthNameOf(first)} ${year}`,
+        rows: rowsOf(md).map((r) => ({
+          key: r.id ?? r.scope_name,
+          label: r.scope_name,
+          population: r.projected_population,
+          t: sumRows([r], cGroups, true),
+        })),
+      };
+    }
+    // Form A, one dentist — a row for each of the three activities (always all three, like the paper form).
+    if (doctor) {
+      const order = ["consultation_extraction", "ekonsulta", "dental_mission"];
+      return {
+        ...base,
+        mode: "A",
+        title: "Monthly Report on Dental Services e-FHSIS",
+        lead: drName(doctor),
+        rows: order.map((type) => ({
+          key: type,
+          label: ACTIVITY_LABELS[type],
+          t: sumRows(rowsOf(md).filter((r) => r.activity_type === type), groups, filtered),
+        })),
+      };
+    }
+    // Form A, all dentists — Consolidated.
+    const byName = new Map();
+    for (const r of md.dentistRows) {
+      if (!byName.has(r.scope_name)) byName.set(r.scope_name, []);
+      byName.get(r.scope_name).push(r);
+    }
+    return {
+      ...base,
+      mode: "A",
+      underline: true,
+      title: "Consolidated Monthly Report on Dental Services e-FHSIS",
+      lead: "",
+      rows: [...byName.entries()].map(([name, rows]) => ({ key: name, label: drName(name), t: sumRows(rows, groups, filtered) })),
+    };
+  }, [tab, doctor, barangay, sex, ageKeys, groups, filtered, multi, months, year, data]);
+
+  function clearAll() {
+    setDoctor("");
+    setBarangay("");
+    setSex("all");
+    setAgeKeys([]);
+    setToMonth("");
+  }
+
+  // Export = an editable Word file (.doc) with the full header (seals) and the
+  // Prepared by / Noted by footer. Print is separate (window.print()).
+  async function handleExport() {
+    setExporting(true);
+    try {
+      await exportOfficialForm({
+        model,
+        container: document.getElementById("printable-monthly-report"),
+        seals: [SEAL_LEFT, SEAL_RIGHT],
+        signatories: SIGNATORIES,
+      });
+    } catch (e) {
+      setError(e.message || "Export failed");
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 print:hidden">
+        <div className="flex gap-2">
+          <button
+            onClick={() => setTab("dentist")}
+            className={`text-sm font-semibold rounded-full px-4 py-2 ${
+              tab === "dentist" ? "bg-brand-900 text-brand-50" : "bg-cream-200 text-forest-800"
+            }`}
+          >
+            By Dentist
+          </button>
+          <button
+            onClick={() => setTab("barangay")}
+            className={`text-sm font-semibold rounded-full px-4 py-2 ${
+              tab === "barangay" ? "bg-brand-900 text-brand-50" : "bg-cream-200 text-forest-800"
+            }`}
+          >
+            By Barangay
+          </button>
+        </div>
+      </div>
+
+      {/* Filters under the tabs: one simple list of typeable boxes. */}
+      <div className="rounded-xl border border-cream-200 bg-cream-50 px-4 py-3 print:hidden">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <p className="text-sm font-semibold text-forest-950">Filters</p>
+          {anyFilter && (
+            <button type="button" onClick={clearAll} className="text-xs font-semibold underline text-forest-700 hover:text-forest-950">
+              Clear
+            </button>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-forest-700">
+          <label className="flex items-center gap-1.5">
+            Month (from)
+            <SuggestInput
+              value={fromMonth}
+              onSelect={(v) => v && setFromMonth(v)}
+              options={MONTH_OPTIONS}
+              placeholder="Type month"
+              width="w-28"
+            />
+          </label>
+
+          <label className="flex items-center gap-1.5">
+            Month (to)
+            <SuggestInput
+              value={toMonth}
+              onSelect={setToMonth}
+              options={MONTH_OPTIONS}
+              placeholder="Optional"
+              ariaLabel="Month to (optional — leave blank for one month only)"
+              width="w-28"
+            />
+          </label>
+
+          <label className="flex items-center gap-1.5">
+            Year
+            <SuggestInput value={year} onSelect={(y) => y && setYear(y)} options={yearOptions} placeholder="Year" width="w-20" />
+          </label>
+
+          {tab === "dentist" ? (
+            <label className="flex items-center gap-1.5">
+              Doctor
+              <SuggestInput
+                value={doctor}
+                onSelect={setDoctor}
+                options={doctorNames.map((n) => ({ value: n, label: drName(n) }))}
+                placeholder="Type doctor"
+                width="w-40"
+              />
+            </label>
+          ) : (
+            <label className="flex items-center gap-1.5">
+              Barangay
+              <SuggestInput
+                value={barangay}
+                onSelect={setBarangay}
+                options={barangayNames.map((n) => ({ value: n, label: n }))}
+                placeholder="Type barangay"
+                width="w-40"
+              />
+            </label>
+          )}
+
+          <label className="flex items-center gap-1.5">
+            Sex
+            <SuggestInput
+              value={sex === "all" ? "" : sex}
+              onSelect={(v) => setSex(v || "all")}
+              options={[
+                { value: "m", label: "Male" },
+                { value: "f", label: "Female" },
+              ]}
+              placeholder="Type sex"
+              width="w-24"
+            />
+          </label>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            <label className="flex items-center gap-1.5">
+              Age group
+              <SuggestInput
+                value=""
+                resetOnSelect
+                onSelect={(key) => key && !ageKeys.includes(key) && setAgeKeys((cur) => [...cur, key])}
+                options={CATEGORY_GROUPS.filter((g) => !ageKeys.includes(g.key)).map((g) => ({ value: g.key, label: GROUP_SHORT[g.key] }))}
+                placeholder="Type age group"
+                width="w-36"
+              />
+            </label>
+            {ageKeys.map((key) => (
+              <span key={key} className="inline-flex items-center gap-1 rounded-full bg-brand-900 text-brand-50 font-semibold pl-2.5 pr-1.5 py-0.5">
+                {GROUP_SHORT[key]}
+                <button
+                  type="button"
+                  onClick={() => setAgeKeys((cur) => cur.filter((k) => k !== key))}
+                  aria-label={`Remove ${GROUP_SHORT[key]}`}
+                  className="leading-none px-0.5 hover:opacity-70"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
+        {multi && (
+          <p className="mt-2 text-[11px] text-forest-500">
+            Showing {months.length} months: {months.map((m) => monthNameOf(m).charAt(0) + monthNameOf(m).slice(1).toLowerCase()).join(", ")}
+          </p>
+        )}
+      </div>
+
+      {error && <p className="text-sm text-red-600 print:hidden">{error}</p>}
+      <Card
+        title="Report form"
+        subtitle="Official e-FHSIS layout · follows the filters above"
+        action={
+          <div className="flex gap-2 print:hidden">
+            <button
+              onClick={() => window.print()}
+              className="inline-flex items-center gap-1.5 bg-cream-200 text-forest-800 text-sm font-semibold rounded-full px-4 py-2 hover:bg-cream-100"
+            >
+              <Printer size={15} /> Print
+            </button>
+            <button
+              onClick={handleExport}
+              disabled={exporting || loading}
+              className="inline-flex items-center gap-1.5 bg-brand-900 text-brand-50 text-sm font-semibold rounded-full px-4 py-2 hover:bg-brand-800 disabled:opacity-60"
+            >
+              <Download size={15} /> {exporting ? "Exporting…" : "Export (editable .doc)"}
+            </button>
+          </div>
+        }
+      >
+        {/* Only this block prints (see the print rules in index.css). */}
+        <div id="printable-monthly-report">
+          <style>{PRINT_CSS}</style>
+          <OfficialReport model={model} loading={loading} />
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 export default function AdminMonthlyReport({ readOnly = false }) {
   const [tab, setTab] = useState("dentist");
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [dentistRows, setDentistRows] = useState([]);
   const [barangayRows, setBarangayRows] = useState([]);
   const [servicesRendered, setServicesRendered] = useState([]);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   // Summary filters: which part to show, and (for Part III) which dentist.
   const [groupBy, setGroupBy] = useState("age");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [reportView, setReportView] = useState("table"); // top report card: "table" | "bar" | "pie" | "line"
-  const [showEntry, setShowEntry] = useState(false); // editable per-dentist / per-barangay tables
   const [dentistFilter, setDentistFilter] = useState("");
   // Extra report filters: barangay, age group(s) and sex.
   const [barangayFilter, setBarangayFilter] = useState("");
@@ -656,7 +1397,6 @@ export default function AdminMonthlyReport({ readOnly = false }) {
   const filtered = ageFilter.length > 0 || sexFilter !== "all";
 
   function load() {
-    setLoading(true);
     setError("");
     Promise.all([
       api.get(`/monthly-reports?month=${month}&scope=dentist`),
@@ -668,8 +1408,7 @@ export default function AdminMonthlyReport({ readOnly = false }) {
         setBarangayRows(b.rows);
         setServicesRendered(sr.servicesRendered);
       })
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
+      .catch((err) => setError(err.message));
   }
   useEffect(load, [month]);
 
@@ -696,15 +1435,6 @@ export default function AdminMonthlyReport({ readOnly = false }) {
     () => dentistGroups.map(([name, rows]) => ({ name, totals: sumRows(rows, groups, filtered) })),
     [dentistGroups, groups, filtered]
   );
-  const visibleDentistTotals = dentistPerDentistTotals;
-  const consolidatedByActivity = useMemo(() => {
-    const byActivity = new Map();
-    for (const r of shownDentistRows) {
-      if (!byActivity.has(r.activity_type)) byActivity.set(r.activity_type, []);
-      byActivity.get(r.activity_type).push(r);
-    }
-    return [...byActivity.entries()].map(([activity, rows]) => ({ activity, totals: sumRows(rows, groups, filtered) }));
-  }, [shownDentistRows, groups, filtered]);
   const grandTotal = useMemo(() => sumRows(shownDentistRows, groups, filtered), [shownDentistRows, groups, filtered]);
   const barangayGrandTotal = useMemo(() => sumRows(shownBarangayRows, groups, filtered), [shownBarangayRows, groups, filtered]);
   // Part I: barangay figures by default; if only a doctor is picked, that doctor's figures.
@@ -729,15 +1459,6 @@ export default function AdminMonthlyReport({ readOnly = false }) {
   function toggleAge(key) {
     setAgeFilter((cur) => (cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]));
   }
-  const filterText = [
-    barangayFilter && `Barangay: ${barangayFilter}`,
-    dentistFilter && `Doctor: ${drName(dentistFilter)}`,
-    ageText.trim() && `Exact age: ${ageText.trim()}`,
-    ageFilter.length > 0 && `Age: ${CATEGORY_GROUPS.filter((g) => ageFilter.includes(g.key)).map((g) => GROUP_SHORT[g.key]).join(", ")}`,
-    sexFilter !== "all" && `Sex: ${sexFilter === "m" ? "Male" : "Female"}`,
-  ]
-    .filter(Boolean)
-    .join(" · ");
   const notes = [];
   if (barangayFilter && dentistFilter && groupBy === "age") notes.push("Barangay and doctor figures are tallied separately, so age groups show the barangay figures when both are picked.");
   if (barangayFilter && groupBy === "dentist") notes.push("The barangay filter doesn't apply when grouped by dentist (those are counted per doctor).");
@@ -781,24 +1502,6 @@ export default function AdminMonthlyReport({ readOnly = false }) {
     return { rows, grand, rowsSum };
   }, [groupBy, groups, filtered, partITotals, shownBarangayRows, barangayGrandTotal, dentistPerDentistTotals, grandTotal, servicesRendered]);
 
-  function printForm() {
-    // The paper-form tables are what prints, so make sure they're on screen first.
-    setShowEntry(true);
-    setTimeout(() => window.print(), 200);
-  }
-
-  async function saveField(row, field, value) {
-    setError("");
-    try {
-      const updated = await api.patch(`/monthly-reports/${row.id}`, { [field]: value });
-      const apply = (list) => list.map((r) => (r.id === row.id ? updated : r));
-      if (row.scope === "dentist") setDentistRows(apply);
-      else setBarangayRows(apply);
-    } catch (err) {
-      setError(err.message);
-    }
-  }
-
   return (
     <div className="space-y-6">
       {readOnly && (
@@ -806,7 +1509,7 @@ export default function AdminMonthlyReport({ readOnly = false }) {
           Preview only — doctor accounts can view the Reports page but cannot edit figures.
         </div>
       )}
-      <div className="flex items-start justify-between flex-wrap gap-3 print:mb-4">
+      <div className="flex items-start justify-between flex-wrap gap-3 print:hidden">
         <div>
           <h1 className="font-display text-2xl font-extrabold text-forest-950">
             Reports on Dental Services (e-FHSIS)
@@ -814,7 +1517,6 @@ export default function AdminMonthlyReport({ readOnly = false }) {
           <p className="text-sm font-medium text-forest-700 mt-1">
             City Dental Office · City of Tayabas, Province of Quezon · {formatMonthLabel(month)}
           </p>
-          {filterText && <p className="hidden print:block text-xs text-forest-700 mt-1">Filters — {filterText}</p>}
         </div>
       </div>
 
@@ -1078,216 +1780,9 @@ export default function AdminMonthlyReport({ readOnly = false }) {
         title={`Chart — by ${GROUP_BY.find((g) => g.key === groupBy).label}`}
       />
 
-      <div className="flex items-center justify-between flex-wrap gap-3 print:hidden">
-        <div>
-          <button
-            type="button"
-            onClick={() => setShowEntry((v) => !v)}
-            aria-expanded={showEntry}
-            className="text-sm font-semibold rounded-full px-4 py-2 bg-cream-200 text-forest-800 hover:bg-cream-300"
-          >
-            {showEntry ? "Hide" : "Show"} entry tables (edit counts)
-          </button>
-          {showEntry && (
-            <p className="text-sm text-forest-700 max-w-2xl mt-2">
-              Digitized version of the City Dental Office's monthly report — enter counts cell-by-cell like the paper
-              form, per dentist or per barangay. Subtotals and the overall total are calculated for you.
-            </p>
-          )}
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={printForm}
-            className="inline-flex items-center gap-1.5 bg-cream-200 text-forest-800 text-sm font-semibold rounded-full px-4 py-2 hover:bg-cream-300"
-          >
-            <Printer size={15} /> Print
-          </button>
-          <button
-            onClick={printForm}
-            className="inline-flex items-center gap-1.5 bg-brand-900 text-brand-50 text-sm font-semibold rounded-full px-4 py-2 hover:bg-brand-800"
-          >
-            <Download size={15} /> Export official form
-          </button>
-        </div>
-      </div>
+      <ReportFormSection tab={tab} setTab={setTab} />
 
-      {showEntry && (
-      <div className="flex items-center justify-between flex-wrap gap-3 print:hidden">
-        <div className="flex gap-2">
-          <button
-            onClick={() => setTab("dentist")}
-            className={`text-sm font-semibold rounded-full px-4 py-2 ${
-              tab === "dentist" ? "bg-brand-900 text-brand-50" : "bg-cream-200 text-forest-800"
-            }`}
-          >
-            By Dentist
-          </button>
-          <button
-            onClick={() => setTab("barangay")}
-            className={`text-sm font-semibold rounded-full px-4 py-2 ${
-              tab === "barangay" ? "bg-brand-900 text-brand-50" : "bg-cream-200 text-forest-800"
-            }`}
-          >
-            By Barangay
-          </button>
-        </div>
-      </div>
-      )}
-
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      {loading && <EmptyState>Loading…</EmptyState>}
-
-      {/* id="printable-monthly-report" hooks into the site-wide print rules
-          (see index.css) that hide everything else on the page and reveal
-          just this block — same mechanism the Patients page print uses.
-          Only one of the two tabs below is ever mounted at a time, so
-          whichever one is on screen is what prints. */}
-      {/* Only the editable tables are locked for doctors — the filters, tabs
-          and Print stay usable. */}
-      <fieldset disabled={readOnly} style={{ display: "contents" }}>
-      <div id="printable-monthly-report">
-      {showEntry && !loading && tab === "dentist" && (
-        <div className="space-y-6">
-          {dentistGroups.length === 0 && (
-            <EmptyState>No dentists on Staff Management yet — add one there to start logging this month's report.</EmptyState>
-          )}
-
-          {dentistGroups.map(([name, rows]) => (
-            <Card key={name} title={drName(name)} className="print:break-after-page">
-              <div className="overflow-x-auto">
-                <table className="text-xs w-full min-w-[1400px]">
-                  <thead className="bg-brand-900 text-brand-50">
-                    <GroupHeaderRows groups={groups} />
-                  </thead>
-                  <tbody>
-                    {rows
-                      .slice()
-                      .sort((a, b) => ["consultation_extraction", "ekonsulta", "dental_mission"].indexOf(a.activity_type) - ["consultation_extraction", "ekonsulta", "dental_mission"].indexOf(b.activity_type))
-                      .map((r) => (
-                        <EditableRow key={r.id} row={r} rowLabel={ACTIVITY_LABELS[r.activity_type]} onSaveField={saveField} editable={!readOnly} groups={groups} filtered={filtered} />
-                      ))}
-                    <TotalsRow label="Subtotal" totals={dentistPerDentistTotals.find((d) => d.name === name)?.totals ?? emptyTotals()} groups={groups} />
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          ))}
-
-          {dentistGroups.length > 0 && (
-            <Card title="Consolidated (all dentists this month)">
-              <div className="overflow-x-auto">
-                <table className="text-xs w-full min-w-[1400px]">
-                  <thead className="bg-brand-900 text-brand-50">
-                    <GroupHeaderRows groups={groups} />
-                  </thead>
-                  <tbody>
-                    {consolidatedByActivity.map(({ activity, totals }) => (
-                      <tr key={activity} className="border-t border-cream-200">
-                        <td className="px-2 py-1.5 font-medium text-forest-950 sticky left-0 bg-cream-50 whitespace-nowrap">
-                          {ACTIVITY_LABELS[activity]}
-                        </td>
-                        {groups.flatMap((g) =>
-                          g.sexes.map((s) => (
-                            <td key={`${g.key}_${s}`} className="px-1 py-1.5 border-l border-cream-200 text-center">
-                              {totals[`${g.key}_${s}`]}
-                            </td>
-                          ))
-                        )}
-                        <td className="px-2 py-1.5 text-center border-l border-cream-200 font-semibold">{totals.total}</td>
-                      </tr>
-                    ))}
-                    <TotalsRow label="Overall Total" totals={grandTotal} groups={groups} />
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          )}
-        </div>
-      )}
-
-      {showEntry && !loading && tab === "barangay" && (
-        <Card title={barangayFilter ? `${barangayFilter} — ${month}` : `All 66 barangays — ${month}`}>
-          <div className="overflow-x-auto">
-            <table className="text-xs w-full min-w-[1600px]">
-              <thead className="bg-brand-900 text-brand-50">
-                <tr>
-                  <th className="px-2 py-1 text-left sticky left-0 bg-brand-900" rowSpan={2}>
-                    Barangay
-                  </th>
-                  <th className="px-2 py-1 text-center border-l border-forest-700" rowSpan={2}>
-                    Proj. Pop. 2026
-                  </th>
-                  {groups.map((g) => (
-                    <th key={g.key} colSpan={g.sexes.length} className="px-2 py-1 text-center border-l border-forest-700 align-bottom">
-                      {g.label}
-                    </th>
-                  ))}
-                  <th className="px-2 py-1 text-center border-l border-forest-700" rowSpan={2}>
-                    Grand Total
-                  </th>
-                </tr>
-                <tr>
-                  {groups.flatMap((g) =>
-                    g.sexes.map((s) => (
-                      <th key={`${g.key}_${s}`} className="px-1 py-1 text-center border-l border-forest-700 font-normal">
-                        {s.toUpperCase()}
-                      </th>
-                    ))
-                  )}
-                </tr>
-              </thead>
-              <tbody>
-                {shownBarangayRows.map((r) => (
-                  <tr key={r.id} className="border-t border-cream-200">
-                    <td className="px-2 py-1.5 font-medium text-forest-950 sticky left-0 bg-cream-50 whitespace-nowrap">
-                      {r.scope_name}
-                    </td>
-                    <td className="px-1 py-1 border-l border-cream-200 text-center w-20">
-                      <EditableCell
-                        value={String(r.projected_population ?? "")}
-                        type="number"
-                        placeholder="—"
-                        onSave={(v) => saveField(r, "projected_population", v)}
-                        className="text-center"
-                      />
-                    </td>
-                    {groups.flatMap((g) =>
-                      g.sexes.map((s) => {
-                        const field = `${g.key}_${s}`;
-                        return (
-                          <td key={field} className="px-1 py-1 border-l border-cream-200 text-center w-16">
-                            <EditableCell
-                              value={String(r[field] ?? 0)}
-                              type="number"
-                              onSave={(v) => saveField(r, field, v)}
-                              className="text-center"
-                            />
-                          </td>
-                        );
-                      })
-                    )}
-                    <td className="px-2 py-1.5 text-center border-l border-cream-200 font-semibold text-forest-950">{filtered ? rowTotal(r, groups) : r.total}</td>
-                  </tr>
-                ))}
-                <tr className="border-t-2 border-brand-900 bg-cream-200 font-semibold">
-                  <td className="px-2 py-1.5 sticky left-0 bg-cream-200">Grand Total</td>
-                  <td className="px-1 py-1.5 border-l border-cream-300"></td>
-                  {groups.flatMap((g) =>
-                    g.sexes.map((s) => (
-                      <td key={`${g.key}_${s}`} className="px-1 py-1.5 border-l border-cream-300 text-center">
-                        {barangayGrandTotal[`${g.key}_${s}`]}
-                      </td>
-                    ))
-                  )}
-                  <td className="px-2 py-1.5 text-center border-l border-cream-300">{barangayGrandTotal.total}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      )}
-      </div>
-      </fieldset>
+      {error && <p className="text-sm text-red-600 print:hidden">{error}</p>}
     </div>
   );
 }
