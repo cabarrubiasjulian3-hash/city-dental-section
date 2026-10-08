@@ -146,9 +146,19 @@ export async function importWorkbookBuffer(buffer) {
   );
   const insertRecord = db.prepare(
     `INSERT INTO dental_records
-       (patient_id, record_date, procedure, dentist, notes, report_month, report_field, report_barangay, report_dentist)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (patient_id, record_date, procedure, dentist, notes, patient_type, report_month, report_field, report_barangay, report_dentist)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
+  // Patient Type snapshot for an imported row — frozen the same way the live
+  // "Add Service Record" flow does it (see currentPatientTypeSnapshot in
+  // routes/dentalRecords.js), using this row's own pregnant/senior/pwd flags.
+  function importedTypeSnapshot(isPregnant, isSenior, isPwd) {
+    const tags = [];
+    if (isPwd) tags.push("PWD");
+    if (isSenior) tags.push("Senior");
+    if (isPregnant) tags.push("Pregnant");
+    return tags.length ? tags.join(",") : "none";
+  }
   const findPatientById = db.prepare("SELECT * FROM users WHERE id = ?");
 
   const placeholderHash = bcrypt.hashSync("Imported123!", 10);
@@ -274,6 +284,7 @@ export async function importWorkbookBuffer(buffer) {
               procedure,
               dentist || null,
               notes || null,
+              importedTypeSnapshot(patientRow.is_pregnant, patientRow.is_senior_citizen, patientRow.is_pwd),
               snapshot.report_month,
               snapshot.report_field,
               snapshot.report_barangay,

@@ -209,6 +209,8 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
   // Search box on the Priority Barangays card.
   const [prioritySearch, setPrioritySearch] = useState("");
   const [priorityOpen, setPriorityOpen] = useState(true); // Priority Barangays show/hide
+  // Month shown by the three counters at the top ("YYYY-MM", Manila time).
+  const [statsMonth, setStatsMonth] = useState(() => manilaToday().slice(0, 7));
 
   function load() {
     api.get("/barangay-schedule").then(setSchedules).catch(() => {});
@@ -397,12 +399,23 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
     }
   }
 
-  const upcomingCount = useMemo(() => schedules.filter((s) => effectiveStatus(s, todayStr, nowMin) === "Upcoming").length, [schedules, todayStr, nowMin]);
+  // Top counters: how many visits fall in the chosen month (default = this
+  // month, Manila time) for each status. Uses the same automatic status as the
+  // table, so the numbers always match what the Schedule list shows.
+  const monthStats = useMemo(() => {
+    const counts = { Upcoming: 0, Completed: 0, "Not Completed": 0 };
+    for (const s of schedules) {
+      if (s.visit_date?.slice(0, 7) !== statsMonth) continue;
+      const st = effectiveStatus(s, todayStr, nowMin);
+      if (st in counts) counts[st] += 1;
+    }
+    return counts;
+  }, [schedules, statsMonth, todayStr, nowMin]);
 
-  const completedThisMonthCount = useMemo(() => {
-    const thisMonth = new Date().toISOString().slice(0, 7);
-    return schedules.filter((s) => effectiveStatus(s, todayStr, nowMin) === "Completed" && s.visit_date?.slice(0, 7) === thisMonth).length;
-  }, [schedules]);
+  const statsMonthLabel = useMemo(() => {
+    const [y, m] = statsMonth.split("-").map(Number);
+    return `${MONTH_NAMES[m - 1]} ${y}`;
+  }, [statsMonth]);
 
   // Dropdown choices for the filters: whatever is actually on the schedule,
   // plus the standard activities / everyone in Staff Management.
@@ -478,10 +491,16 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
     setFilters((f) => ({ ...f, [field]: value }));
   }
 
-  const notYetVisited = useMemo(() => {
-    const scheduled = new Set(schedules.map((s) => s.barangay_name));
-    return TAYABAS_BARANGAYS.filter((name) => !scheduled.has(name));
-  }, [schedules]);
+  // Barangays with no Completed visit yet — includes ones with nothing
+  // scheduled, still Upcoming/Ongoing, or marked Not Completed.
+  const notCompleted = useMemo(() => {
+    const completed = new Set(
+      schedules
+        .filter((s) => effectiveStatus(s, todayStr, nowMin) === "Completed")
+        .map((s) => s.barangay_name)
+    );
+    return TAYABAS_BARANGAYS.filter((name) => !completed.has(name));
+  }, [schedules, todayStr, nowMin]);
 
   // Priority Barangays search: matches any part of the name, ignoring case
   // and a leading "Barangay"/"Brgy." ("ilaya", "brgy alupay" both work).
@@ -490,9 +509,9 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
       .toLowerCase()
       .replace(/\b(barangay|brgy\.?)\b/g, "")
       .trim();
-    if (!q) return notYetVisited;
-    return notYetVisited.filter((name) => name.toLowerCase().includes(q));
-  }, [notYetVisited, prioritySearch]);
+    if (!q) return notCompleted;
+    return notCompleted.filter((name) => name.toLowerCase().includes(q));
+  }, [notCompleted, prioritySearch]);
 
   return (
     <div className="space-y-6">
@@ -522,13 +541,29 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
         </div>
       </div>
 
-      <div className="grid sm:grid-cols-3 gap-4">
-        <StatCard label="Upcoming activities" value={upcomingCount} />
-        <StatCard label="Completed this month" value={completedThisMonthCount} />
-        <StatCard label="Barangays not yet visited" value={notYetVisited.length} />
-      </div>
     </div>
     </fieldset>
+
+      {/* Outside the read-only fieldset on purpose: the month picker only changes
+          what the counters show, so doctors can use it too. */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <p className="text-sm font-semibold text-forest-950">Activities in {statsMonthLabel}</p>
+          <input
+            type="month"
+            value={statsMonth}
+            onChange={(e) => e.target.value && setStatsMonth(e.target.value)}
+            aria-label="Month for the counters"
+            className="rounded-lg border border-cream-200 bg-cream-100 px-2 py-1 text-xs text-forest-950"
+          />
+        </div>
+
+        <div className="grid sm:grid-cols-3 gap-4">
+          <StatCard label="Upcoming" value={monthStats.Upcoming} />
+          <StatCard label="Completed" value={monthStats.Completed} />
+          <StatCard label="Not Completed" value={monthStats["Not Completed"]} />
+        </div>
+      </div>
 
       {recurringRules.length > 0 && (
         <fieldset disabled={readOnly} style={{ display: "contents" }}>

@@ -91,7 +91,7 @@ function restorePatient(data) {
   if (tableExists("bot_replies")) for (const b of data.bot_replies || []) insertRow("bot_replies", b);
   for (const t of data.tooth_conditions || []) insertRow("tooth_conditions", t);
   for (const r of data.dental_records || []) {
-    const snapshot = applyServiceRecord({ patient: u, recordDate: r.record_date, dentist: r.dentist });
+    const snapshot = applyServiceRecord({ patient: u, recordDate: r.record_date, dentist: r.dentist, patientType: r.patient_type });
     insertRow("dental_records", { ...r, ...snapshot });
   }
 }
@@ -164,7 +164,7 @@ function restoreServiceRecord(data) {
   const r = data.record;
   const patient = db.prepare("SELECT * FROM users WHERE id = ? AND role = 'patient'").get(r.patient_id);
   if (!patient) throw conflict("Can't restore this record — its patient is archived or gone. Restore the patient first.");
-  const snapshot = applyServiceRecord({ patient, recordDate: r.record_date, dentist: r.dentist });
+  const snapshot = applyServiceRecord({ patient, recordDate: r.record_date, dentist: r.dentist, patientType: r.patient_type });
   insertRow("dental_records", { ...r, ...snapshot });
 }
 

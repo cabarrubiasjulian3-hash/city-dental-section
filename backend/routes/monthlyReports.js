@@ -2,6 +2,7 @@ import { Router } from "express";
 import db from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { TAYABAS_BARANGAYS } from "../lib/barangays.js";
+import { flagsFromSnapshot } from "../lib/patientType.js";
 
 const router = Router();
 // Admin AND doctor can read the reports — the Doctor Portal shows the same
@@ -118,6 +119,56 @@ const SERVICE_LABELS = {
   "E-Consultation": "E-Consultation / E-Konsulta",
 };
 const COMMUNITY_ACTIVITIES = ["Dental Mission / QIK", "Toothbrushing Drill / Dental Education"];
+
+// GET /api/monthly-reports/visits?month=YYYY-MM
+// Every service visit logged in that month, with the patient's Patient Type
+// (PWD / Senior / Pregnant) AS IT WAS AT THAT VISIT (dental_records.patient_type;
+// old records without one fall back to the patient's current flags) and their
+// age on the visit date. The Reports page uses this for the Patient type filter.
+router.get("/visits", (req, res) => {
+  const month = /^\d{4}-\d{2}$/.test(req.query.month) ? req.query.month : currentMonth();
+  const rows = db
+    .prepare(
+      `SELECT d.id AS record_id, d.patient_id, d.record_date, d.procedure, d.dentist, d.patient_type,
+              u.name, u.sex, u.barangay, u.birthdate, u.is_pwd, u.is_senior_citizen, u.is_pregnant
+       FROM dental_records d
+       JOIN users u ON u.id = d.patient_id
+       WHERE substr(d.record_date, 1, 7) = ?
+       ORDER BY d.record_date DESC, d.id DESC`
+    )
+    .all(month);
+
+  const visits = rows.map((r) => {
+    const flags = flagsFromSnapshot(r.patient_type) || r;
+    let age = null;
+    const b = r.birthdate ? new Date(r.birthdate) : null;
+    const v = new Date(r.record_date);
+    if (b && !Number.isNaN(b.getTime()) && !Number.isNaN(v.getTime())) {
+      age = v.getFullYear() - b.getFullYear();
+      if (v.getMonth() < b.getMonth() || (v.getMonth() === b.getMonth() && v.getDate() < b.getDate())) age--;
+    }
+    const tags = [];
+    if (flags.is_pwd) tags.push("PWD");
+    if (flags.is_senior_citizen) tags.push("Senior");
+    if (flags.is_pregnant && r.sex !== "Male") tags.push("Pregnant");
+    return {
+      record_id: r.record_id,
+      patient_id: r.patient_id,
+      name: r.name,
+      sex: r.sex,
+      barangay: r.barangay,
+      age,
+      record_date: r.record_date,
+      procedure: r.procedure,
+      dentist: r.dentist,
+      patient_type: tags.length ? tags.join(",") : "none",
+      is_pwd: tags.includes("PWD"),
+      is_senior_citizen: tags.includes("Senior"),
+      is_pregnant: tags.includes("Pregnant"),
+    };
+  });
+  res.json({ month, visits });
+});
 
 router.get("/services-rendered", (req, res) => {
   const month = /^\d{4}-\d{2}$/.test(req.query.month) ? req.query.month : currentMonth();

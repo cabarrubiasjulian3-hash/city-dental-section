@@ -80,6 +80,131 @@ const MEMBERSHIP_FIELDS = [
   { field: "is_indigenous_people", label: "Indigenous People (IP)" },
 ];
 
+// Patient type check boxes (PWD / Senior Citizen / Pregnant). These are saved on
+// the patient record and are what the Reports page filters by.
+const PATIENT_FLAG_FIELDS = [
+  { field: "is_pwd", label: "PWD" },
+  { field: "is_senior_citizen", label: "Senior Citizen" },
+  { field: "is_pregnant", label: "Pregnant" },
+];
+
+// Age in years from a YYYY-MM-DD birthdate (null if it can't be read).
+function ageFromBirthdate(birthdate) {
+  if (!birthdate) return null;
+  const b = new Date(birthdate);
+  if (Number.isNaN(b.getTime())) return null;
+  const now = new Date();
+  let age = now.getFullYear() - b.getFullYear();
+  const m = now.getMonth() - b.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < b.getDate())) age--;
+  return age;
+}
+
+// Reads a Patient Type flag coming from the database (1/0, true/false, "true"/"false").
+const flagOn = (v) => v === true || v === 1 || v === "1" || v === "true";
+
+// Dropdown choices for a record's Patient Type. A patient can have more than one,
+// so the combinations are listed. Male: no "Pregnant"; age 60+: always includes Senior.
+const TYPE_LABELS = { PWD: "PWD", Senior: "Senior Citizen", Pregnant: "Pregnant" };
+function typeOptionsFor(sex, age) {
+  const subsets = [
+    [],
+    ["PWD"],
+    ["Senior"],
+    ["Pregnant"],
+    ["PWD", "Senior"],
+    ["PWD", "Pregnant"],
+    ["Senior", "Pregnant"],
+    ["PWD", "Senior", "Pregnant"],
+  ];
+  return subsets
+    .filter((tags) => !(sex === "Male" && tags.includes("Pregnant")))
+    .filter((tags) => !(age !== null && age >= 60 && !tags.includes("Senior")))
+    .map((tags) => ({
+      value: tags.length ? tags.join(",") : "none",
+      label: tags.length ? tags.map((t) => TYPE_LABELS[t]).join(" + ") : "None",
+    }));
+}
+
+// Small PWD / Senior / Pregnant badges (or "—" when none apply).
+// Text saved on a service record to freeze the Patient Type at that visit,
+// e.g. "Pregnant,PWD" or "none".
+function typeSnapshot(flags) {
+  const tags = [];
+  if (flagOn(flags?.is_pwd)) tags.push("PWD");
+  if (flagOn(flags?.is_senior_citizen)) tags.push("Senior");
+  if (flagOn(flags?.is_pregnant)) tags.push("Pregnant");
+  return tags.length ? tags.join(",") : "none";
+}
+
+// `snapshot` = the Patient Type saved with a service record (what it was at that visit).
+// Old records without one fall back to the patient's current flags (`source`).
+function PatientTypeBadges({ source, snapshot }) {
+  const hasSnapshot = typeof snapshot === "string" && snapshot !== "";
+  const tags = hasSnapshot
+    ? snapshot === "none"
+      ? []
+      : snapshot.split(",").filter(Boolean)
+    : (() => {
+        const t = [];
+        if (flagOn(source?.is_pwd)) t.push("PWD");
+        if (flagOn(source?.is_senior_citizen)) t.push("Senior");
+        if (flagOn(source?.is_pregnant)) t.push("Pregnant");
+        return t;
+      })();
+  if (!tags.length) return <span className="text-forest-500">—</span>;
+  return (
+    <div className="flex flex-wrap gap-1">
+      {tags.map((t) => (
+        <span key={t} className="text-[10px] font-semibold rounded-full bg-cream-200 text-forest-800 px-2 py-0.5">
+          {t}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// Toggle buttons for Patient Type (PWD / Senior Citizen / Pregnant).
+//  - Pregnant is locked (unclickable) when the patient is Male.
+//  - Senior Citizen is automatically ON and locked when age is 60 or above.
+function PatientTypeButtons({ values, sex, age, onToggle, disabled = false, compact = false }) {
+  return (
+    <div className={`flex flex-wrap ${compact ? "gap-1" : "gap-2"}`}>
+      {PATIENT_FLAG_FIELDS.map(({ field, label }) => {
+        const isMaleBlocked = field === "is_pregnant" && sex === "Male";
+        const isAutoSenior = field === "is_senior_citizen" && age !== null && age >= 60;
+        const active = isAutoSenior ? true : isMaleBlocked ? false : !!values[field];
+        const locked = disabled || isMaleBlocked || isAutoSenior;
+
+        let hint;
+        if (isMaleBlocked) hint = "Not available for male patients";
+        else if (isAutoSenior) hint = "Automatically set — patient is 60 years old or above";
+
+        return (
+          <button
+            key={field}
+            type="button"
+            aria-pressed={active}
+            disabled={locked}
+            title={hint}
+            onClick={() => onToggle(field)}
+            className={`rounded-full border font-semibold transition ${
+              compact ? "px-2 py-0.5 text-[11px]" : "px-4 py-1.5 text-sm"
+            } ${
+              active
+                ? "border-forest-900 bg-forest-900 text-cream-50"
+                : "border-forest-900 bg-cream-50 text-forest-900 hover:bg-cream-200"
+            } ${locked ? "cursor-not-allowed opacity-60" : ""}`}
+          >
+            {active ? "✓ " : ""}
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // Boolean checkbox fields for Medical History (the ones without a
 // "please specify" text box).
 const MEDICAL_HISTORY_BOOL_FIELDS = [
@@ -110,6 +235,10 @@ const EMPTY_NEW_PATIENT_FORM = {
   occupation: "",
   parent_guardian: "",
   cellphone_no: "",
+  // Patient type (connected to Reports)
+  is_pwd: "false",
+  is_senior_citizen: "false",
+  is_pregnant: "false",
   // Membership
   is_nhts_pr: "false",
   is_4ps: "false",
@@ -382,6 +511,9 @@ const NAME_PART_FIELDS = ["surname", "first_name", "middle_name"];
 // Fields sent as booleans (stored is_*/has_* columns) — everything else in
 // the New Patient form is sent as-is (string or null).
 const NEW_PATIENT_BOOL_FIELDS = [
+  "is_pwd",
+  "is_senior_citizen",
+  "is_pregnant",
   "is_nhts_pr",
   "is_4ps",
   "is_indigenous_people",
@@ -455,7 +587,17 @@ export default function AdminPatients({ readOnly = false }) {
   const [editingRecordId, setEditingRecordId] = useState(null);
   // Teeth changed on the chart while the Add Service Record popup is open.
   const [addRecordTeeth, setAddRecordTeeth] = useState([]);
-  const [recordDraft, setRecordDraft] = useState({ record_date: "", procedure: "", dentist: "", notes: "" });
+  // Patient Type (PWD / Senior / Pregnant) shown in the Add Service Record popup.
+  // It starts from the patient's current record and, if changed there, is saved
+  // to the patient too — so the Treatment Record and Reports stay in sync.
+  const [addRecordType, setAddRecordType] = useState({ is_pwd: false, is_senior_citizen: false, is_pregnant: false });
+  const [recordDraft, setRecordDraft] = useState({
+    record_date: "",
+    procedure: "",
+    dentist: "",
+    notes: "",
+    type: { is_pwd: false, is_senior_citizen: false, is_pregnant: false },
+  });
   const [savingRecordEdit, setSavingRecordEdit] = useState(false);
   const [recordEditError, setRecordEditError] = useState("");
   const [dentists, setDentists] = useState([]);
@@ -548,7 +690,7 @@ export default function AdminPatients({ readOnly = false }) {
   // (e.g. the staff member was since removed, or it's old free-text data),
   // it's kept as a one-off extra option so the value isn't silently lost.
   function dentistOptions(currentValue) {
-    const opts = [{ value: "", label: "Unassigned" }, ...dentists.map((d) => ({ value: d.name, label: d.name }))];
+    const opts = [{ value: "", label: "Doctor Assign" }, ...dentists.map((d) => ({ value: d.name, label: d.name }))];
     if (currentValue && !dentists.some((d) => d.name === currentValue)) {
       opts.push({ value: currentValue, label: `${currentValue} (not in Staff Management)` });
     }
@@ -786,6 +928,14 @@ export default function AdminPatients({ readOnly = false }) {
         }
         restBody[field] = NEW_PATIENT_BOOL_FIELDS.includes(field) ? value === "true" : value || null;
       }
+
+      // Patient Type rules, enforced again right before saving:
+      //  - age 60+  -> Senior Citizen is always on
+      //  - Male     -> Pregnant is always off
+      const newPatientAge = ageFromBirthdate(newPatientForm.birthdate);
+      if (newPatientAge !== null && newPatientAge >= 60) restBody.is_senior_citizen = true;
+      if (newPatientForm.sex === "Male") restBody.is_pregnant = false;
+
       const updated = await api.patch(`/patients/${created.id}`, restBody);
 
       // Log the first visit right away so the patient never sits at 0 visits
@@ -798,6 +948,7 @@ export default function AdminPatients({ readOnly = false }) {
         procedure: newPatientForm.initial_procedure,
         dentist: newPatientForm.initial_dentist,
         notes: newPatientForm.initial_notes,
+        patient_type: typeSnapshot(restBody),
       });
 
       // Save the Oral Health Chart the admin filled in (teeth left alone are
@@ -844,7 +995,7 @@ export default function AdminPatients({ readOnly = false }) {
       const others = result.matches.filter((m) => m.id !== patient.id);
       setDuplicateWarning(others.length ? others : null);
     } catch {
-      // Huwag i-block ang normal na pag-save kung nag-fail lang ang duplicate check.
+      // Don't block the normal save if only the duplicate check failed.
     }
   }
 
@@ -900,8 +1051,31 @@ export default function AdminPatients({ readOnly = false }) {
     setAddingRecord(true);
     setAddRecordError("");
     try {
-      const row = await api.post("/dental-records", { ...newRecord, patient_id: selected.id, teeth: addRecordTeeth });
-      setRecords((list) => [row, ...list]);
+      // Update the patient's Patient Type first if it changed since the last visit
+      // (e.g. was pregnant before, no longer pregnant now). Rules still apply:
+      // 60+ is always Senior Citizen, and a male patient can't be pregnant.
+      const currentAge = selected.age ?? ageFromBirthdate(selected.birthdate);
+      const nextType = { ...addRecordType };
+      if (currentAge !== null && currentAge >= 60) nextType.is_senior_citizen = true;
+      if (selected.sex === "Male") nextType.is_pregnant = false;
+      const visitTypeSnapshot = typeSnapshot(nextType);
+      const typeChanges = {};
+      for (const { field } of PATIENT_FLAG_FIELDS) {
+        if (nextType[field] !== flagOn(selected[field])) typeChanges[field] = nextType[field];
+      }
+      if (Object.keys(typeChanges).length) {
+        const updatedPatient = await api.patch(`/patients/${selected.id}`, typeChanges);
+        setSelected((s) => ({ ...s, ...updatedPatient }));
+        setPatients((list) => list.map((p) => (p.id === selected.id ? { ...p, ...updatedPatient } : p)));
+      }
+
+      const row = await api.post("/dental-records", {
+        ...newRecord,
+        patient_id: selected.id,
+        teeth: addRecordTeeth,
+        patient_type: visitTypeSnapshot,
+      });
+      setRecords((list) => [{ ...row, patient_type: row.patient_type ?? visitTypeSnapshot }, ...list]);
       setNewRecord({ record_date: "", procedure: "", dentist: "", notes: "" });
       setAddRecordTeeth([]);
       setPatients((list) =>
@@ -943,6 +1117,18 @@ export default function AdminPatients({ readOnly = false }) {
       procedure: record.procedure || "",
       dentist: record.dentist || "",
       notes: record.notes || "",
+      type:
+        typeof record.patient_type === "string" && record.patient_type !== ""
+          ? {
+              is_pwd: record.patient_type.includes("PWD"),
+              is_senior_citizen: record.patient_type.includes("Senior"),
+              is_pregnant: record.patient_type.includes("Pregnant"),
+            }
+          : {
+              is_pwd: flagOn(selected?.is_pwd),
+              is_senior_citizen: flagOn(selected?.is_senior_citizen),
+              is_pregnant: flagOn(selected?.is_pregnant),
+            },
     });
     setEditingRecordId(record.id);
   }
@@ -965,6 +1151,17 @@ export default function AdminPatients({ readOnly = false }) {
     if (recordDraft.procedure !== (record.procedure || "")) body.procedure = recordDraft.procedure;
     if (recordDraft.dentist !== (record.dentist || "")) body.dentist = recordDraft.dentist;
     if (recordDraft.notes !== (record.notes || "")) body.notes = recordDraft.notes;
+
+    // Patient Type for this visit (rules still apply: 60+ is Senior, male can't be pregnant).
+    const editAge = selected.age ?? ageFromBirthdate(selected.birthdate);
+    const editedType = { ...recordDraft.type };
+    if (editAge !== null && editAge >= 60) editedType.is_senior_citizen = true;
+    if (selected.sex === "Male") editedType.is_pregnant = false;
+    const editedSnapshot = typeSnapshot(editedType);
+    const shownSnapshot =
+      typeof record.patient_type === "string" && record.patient_type !== "" ? record.patient_type : typeSnapshot(selected);
+    if (editedSnapshot !== shownSnapshot) body.patient_type = editedSnapshot;
+
     if (!Object.keys(body).length) {
       cancelEditRecord();
       return;
@@ -973,7 +1170,22 @@ export default function AdminPatients({ readOnly = false }) {
     setRecordEditError("");
     try {
       const updated = await api.patch(`/dental-records/${record.id}`, body);
-      setRecords((list) => list.map((r) => (r.id === record.id ? updated : r)));
+      const savedRecord = { ...updated, patient_type: updated.patient_type ?? body.patient_type ?? record.patient_type };
+      setRecords((list) => list.map((r) => (r.id === record.id ? savedRecord : r)));
+
+      // If this is the newest visit, the patient's current Patient Type follows it
+      // (so the Treatment Record, patient list and Reports stay in sync).
+      if (body.patient_type && records[0]?.id === record.id) {
+        const currentChanges = {};
+        for (const { field } of PATIENT_FLAG_FIELDS) {
+          if (editedType[field] !== flagOn(selected[field])) currentChanges[field] = editedType[field];
+        }
+        if (Object.keys(currentChanges).length) {
+          const updatedPatient = await api.patch(`/patients/${selected.id}`, currentChanges);
+          setSelected((s) => ({ ...s, ...updatedPatient }));
+          setPatients((list) => list.map((p) => (p.id === selected.id ? { ...p, ...updatedPatient } : p)));
+        }
+      }
       // The patient list's "latest procedure" / status pill can change too.
       loadPatients();
       setEditingRecordId(null);
@@ -1075,7 +1287,17 @@ export default function AdminPatients({ readOnly = false }) {
   // Small helper for the New Patient modal's plain controlled inputs —
   // updates one field of newPatientForm.
   function setNewPatientField(field, value) {
-    setNewPatientForm((form) => ({ ...form, [field]: value }));
+    setNewPatientForm((form) => {
+      const next = { ...form, [field]: value };
+      // Born 60 or more years ago: tick Senior Citizen automatically.
+      if (field === "birthdate") {
+        const age = ageFromBirthdate(value);
+        if (age !== null && age >= 60) next.is_senior_citizen = "true";
+      }
+      // A male patient can't be pregnant.
+      if (field === "sex" && value === "Male") next.is_pregnant = "false";
+      return next;
+    });
     // Any edit to the fields that feed the duplicate check invalidates a
     // previous "continue anyway" confirmation and any stale match result —
     // both were about whatever name/barangay was on screen before this edit.
@@ -1084,6 +1306,21 @@ export default function AdminPatients({ readOnly = false }) {
       setNewPatientMatches([]);
     }
   }
+
+  // Keep Patient Type consistent for the open patient:
+  //  - age 60+ -> Senior Citizen is switched on automatically
+  //  - Male    -> Pregnant is switched off automatically
+  useEffect(() => {
+    if (!selected || !canEdit) return;
+    const age = selected.age ?? ageFromBirthdate(selected.birthdate);
+    if (age !== null && age >= 60 && !selected.is_senior_citizen) {
+      savePatientField(selected, "is_senior_citizen", "true");
+    }
+    if (selected.sex === "Male" && selected.is_pregnant) {
+      savePatientField(selected, "is_pregnant", "false");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id, selected?.age, selected?.birthdate, selected?.sex, selected?.is_senior_citizen, selected?.is_pregnant]);
 
   const filtered = search.trim() ? patients.filter((p) => patientMatchesSearch(p, search, statusFor(p))) : patients;
 
@@ -1220,10 +1457,10 @@ export default function AdminPatients({ readOnly = false }) {
               </label>
 
               <label className="text-xs text-forest-700">
-                Middle Name <span className="text-forest-500">(optional — pwede middle initial lang)</span>
+                Middle Name <span className="text-forest-500">(optional — a middle initial is fine)</span>
                 <input
                   className="patient-input"
-                  placeholder="D. o Dela Cruz"
+                  placeholder="D. or Dela Cruz"
                   value={newPatientForm.middle_name}
                   onChange={(e) => setNewPatientField("middle_name", e.target.value)}
                   onBlur={checkNewPatientDuplicate}
@@ -1312,9 +1549,29 @@ export default function AdminPatients({ readOnly = false }) {
 
             {checkingNewPatient && <p className="text-xs text-forest-700">Checking existing patient records...</p>}
 
-            {/* The "may existing record na" warning is a pop-up now (see the
-                duplicatePopup dialog at the bottom of this page), not a banner
-                down here in the form. */}
+            {/* The "this patient already has a record" warning is a pop-up now
+                (see the duplicatePopup dialog at the bottom of this page), not
+                a banner down here in the form. */}
+
+            {/* Patient type — saved on the record and used by the Reports page */}
+            <div className="border-t border-cream-200 pt-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-forest-700 mb-2">Patient Type</p>
+              <PatientTypeButtons
+                values={{
+                  is_pwd: newPatientForm.is_pwd === "true",
+                  is_senior_citizen: newPatientForm.is_senior_citizen === "true",
+                  is_pregnant: newPatientForm.is_pregnant === "true",
+                }}
+                sex={newPatientForm.sex}
+                age={ageFromBirthdate(newPatientForm.birthdate)}
+                onToggle={(field) =>
+                  setNewPatientField(field, newPatientForm[field] === "true" ? "false" : "true")
+                }
+              />
+              <p className="mt-1 text-xs text-forest-500">
+                Senior Citizen is set automatically at age 60+. Pregnant is not available for male patients.
+              </p>
+            </div>
 
             {/* Membership */}
             <div className="border-t border-cream-200 pt-3">
@@ -1672,7 +1929,7 @@ export default function AdminPatients({ readOnly = false }) {
 
           {duplicateWarning && (
             <div className="bg-red-50 border border-red-300 text-red-700 text-sm rounded-lg px-3 py-2 mb-2 print:hidden">
-              ⚠ May kahalintulad nang record: <strong>{duplicateWarning[0].name}</strong>
+              ⚠ A similar record already exists: <strong>{duplicateWarning[0].name}</strong>
               {duplicateWarning[0].barangay ? ` (${duplicateWarning[0].barangay})` : ""}.{" "}
               <button
                 className="underline ml-2"
@@ -1681,11 +1938,11 @@ export default function AdminPatients({ readOnly = false }) {
                   setDuplicateWarning(null);
                 }}
               >
-                Buksan ang existing record
+                Open existing record
               </button>
               {" · "}
               <button className="underline" onClick={() => setDuplicateWarning(null)}>
-                Ituloy pa rin
+                Continue anyway
               </button>
             </div>
           )}
@@ -1699,6 +1956,7 @@ export default function AdminPatients({ readOnly = false }) {
                     <th className="py-2 px-2">Brgy.</th>
                     <th className="py-2 px-2">Age</th>
                     <th className="py-2 px-2">Sex</th>
+                    <th className="py-2 px-2">Patient Type</th>
                     <th className="py-2 px-2 text-center">DMFT</th>
                     <th className="py-2 px-2">Dentist</th>
                     <th className="py-2 px-2">Status</th>
@@ -1722,6 +1980,23 @@ export default function AdminPatients({ readOnly = false }) {
                       <td className="px-2 py-2 text-forest-700">{p.barangay || "—"}</td>
                       <td className="px-2 py-2 text-forest-700">{p.age ?? "—"}</td>
                       <td className="px-2 py-2 text-forest-700">{p.sex || "—"}</td>
+                      <td className="px-2 py-2">
+                        {Number(p.is_pwd) || Number(p.is_senior_citizen) || Number(p.is_pregnant) ? (
+                          <div className="flex flex-wrap gap-1">
+                            {Number(p.is_pwd) ? (
+                              <span className="text-[10px] font-semibold rounded-full bg-cream-200 text-forest-800 px-2 py-0.5">PWD</span>
+                            ) : null}
+                            {Number(p.is_senior_citizen) ? (
+                              <span className="text-[10px] font-semibold rounded-full bg-cream-200 text-forest-800 px-2 py-0.5">Senior</span>
+                            ) : null}
+                            {Number(p.is_pregnant) ? (
+                              <span className="text-[10px] font-semibold rounded-full bg-cream-200 text-forest-800 px-2 py-0.5">Pregnant</span>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <span className="text-forest-500">—</span>
+                        )}
+                      </td>
                       <td className="px-2 py-2 text-center text-forest-700">{p.visit_count || 0}</td>
                       <td className="px-2 py-2 text-forest-700">{p.latest_dentist || "—"}</td>
                       <td className="px-2 py-2">
@@ -1803,12 +2078,13 @@ export default function AdminPatients({ readOnly = false }) {
 
             {records.length ? (
               <div className="max-h-[320px] overflow-y-auto overflow-x-auto">
-                <table className="w-full text-sm min-w-[680px]">
+                <table className="w-full text-sm min-w-[860px]">
                   <thead>
                     <tr className="text-left text-forest-700 uppercase text-xs">
                       <th className="py-2 pr-2">Date</th>
                       <th className="py-2 pr-2">Procedure</th>
                       <th className="py-2 pr-2">Status</th>
+                      <th className="py-2 pr-2">Patient Type</th>
                       <th className="py-2 pr-2">Dentist</th>
                       <th className="py-2 pr-2">Notes</th>
                       <th className="py-2 pr-2">Last edited by</th>
@@ -1845,6 +2121,36 @@ export default function AdminPatients({ readOnly = false }) {
                           </td>
                           <td className="py-2 pr-2 text-forest-500">
                             <span className="inline-block px-3 py-1 text-xs">—</span>
+                          </td>
+                          <td className="py-2 pr-2">
+                            <select
+                              disabled={!canEdit}
+                              value={(() => {
+                                const age = selected.age ?? ageFromBirthdate(selected.birthdate);
+                                const eff = { ...recordDraft.type };
+                                if (age !== null && age >= 60) eff.is_senior_citizen = true;
+                                if (selected.sex === "Male") eff.is_pregnant = false;
+                                return typeSnapshot(eff);
+                              })()}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setRecordDraft((d) => ({
+                                  ...d,
+                                  type: {
+                                    is_pwd: v.includes("PWD"),
+                                    is_senior_citizen: v.includes("Senior"),
+                                    is_pregnant: v.includes("Pregnant"),
+                                  },
+                                }));
+                              }}
+                              className="w-full min-w-[150px] px-2 py-1.5 rounded border border-forest-500 bg-cream-50 text-sm"
+                            >
+                              {typeOptionsFor(selected.sex, selected.age ?? ageFromBirthdate(selected.birthdate)).map((o) => (
+                                <option key={o.value} value={o.value}>
+                                  {o.label}
+                                </option>
+                              ))}
+                            </select>
                           </td>
                           <td className="py-2 pr-2 min-w-[140px]">
                             <select
@@ -1911,23 +2217,14 @@ export default function AdminPatients({ readOnly = false }) {
                               {recordStatuses.get(r.id) || "—"}
                             </span>
                           </td>
-                          <td className="py-2 pr-2 min-w-[140px]">
-                            <EditableCell
-                              type="select"
-                              options={dentistOptions(r.dentist)}
-                              value={r.dentist}
-                              placeholder="Unassigned"
-                              onSave={(v) => saveRecordField(r, "dentist", v)}
-                            />
+                          <td className="py-2 pr-2">
+                            <PatientTypeBadges source={selected} snapshot={r.patient_type} />
                           </td>
-                          <td className="py-2 pr-2 min-w-[160px]">
-                            <NotesCell
-                              value={r.notes}
-                              title={`${r.procedure || "Service record"}${
-                                r.record_date ? ` · ${new Date(r.record_date).toLocaleDateString()}` : ""
-                              }`}
-                              onSave={(v) => saveRecordField(r, "notes", v)}
-                            />
+                          <td className="py-2 pr-2 min-w-[140px] text-forest-950">{r.dentist || "—"}</td>
+                          <td className="py-2 pr-2 min-w-[160px] max-w-[260px] text-forest-950">
+                            <span className="block truncate" title={r.notes || ""}>
+                              {r.notes || "—"}
+                            </span>
                           </td>
                           <td className="py-2 pr-2">
                             <EditedBy row={r} stacked />
@@ -1991,6 +2288,11 @@ export default function AdminPatients({ readOnly = false }) {
                 type="button"
                 onClick={() => {
                   setAddRecordError("");
+                  setAddRecordType({
+                    is_pwd: flagOn(selected.is_pwd),
+                    is_senior_citizen: flagOn(selected.is_senior_citizen),
+                    is_pregnant: flagOn(selected.is_pregnant),
+                  });
                   setShowHistoryModal(false);
                   setShowAddRecordModal(true);
                 }}
@@ -2093,6 +2395,21 @@ export default function AdminPatients({ readOnly = false }) {
                 onChange={(e) => setNewRecord((f) => ({ ...f, notes: e.target.value }))}
                 className="rounded-lg border border-cream-200 bg-cream-100 px-3 py-2 text-sm"
               />
+
+              <div className="col-span-2 rounded-xl border border-cream-200 bg-cream-50 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-forest-700 mb-2">Patient Type</p>
+                <PatientTypeButtons
+                  values={addRecordType}
+                  sex={selected.sex}
+                  age={selected.age ?? ageFromBirthdate(selected.birthdate)}
+                  disabled={!canEdit}
+                  onToggle={(field) => setAddRecordType((t) => ({ ...t, [field]: !t[field] }))}
+                />
+                <p className="mt-2 text-xs text-forest-500">
+                  Update this if the patient's status changed since the last visit (for example, no longer pregnant).
+                  It also updates the Individual Patient Treatment Record.
+                </p>
+              </div>
 
               <div className="col-span-2 pt-2">
                 <ToothChart patientId={selected.id} isAdmin lockRecorded onTeethChanged={setAddRecordTeeth} />
@@ -2254,6 +2571,28 @@ export default function AdminPatients({ readOnly = false }) {
                       className="font-semibold text-forest-950"
                     />
                   </div>
+                </div>
+
+                {/* Patient Type: PWD / Senior Citizen / Pregnant */}
+                <div className="bg-white border border-cream-200 rounded-2xl p-5">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-forest-700 mb-2">
+                    Patient Type
+                  </p>
+                  <PatientTypeButtons
+                    values={{
+                      is_pwd: flagOn(selected.is_pwd),
+                      is_senior_citizen: flagOn(selected.is_senior_citizen),
+                      is_pregnant: flagOn(selected.is_pregnant),
+                    }}
+                    sex={selected.sex}
+                    age={selected.age ?? ageFromBirthdate(selected.birthdate)}
+                    disabled={!canEdit}
+                    onToggle={(field) => savePatientField(selected, field, String(!flagOn(selected[field])))}
+                  />
+                  <p className="mt-2 text-xs text-forest-500">
+                    Senior Citizen turns on automatically at age 60 and above. Pregnant cannot be selected for male
+                    patients.
+                  </p>
                 </div>
 
                 {/* Box 1: Other Patient Information (Membership) + Vital Signs */}
@@ -2563,11 +2902,11 @@ export default function AdminPatients({ readOnly = false }) {
       {/* ---------- "This patient already has an account / record" pop-up ---------- */}
       <ConfirmDialog
         isOpen={!!duplicatePopup}
-        title="May existing account o record na ang patient na ito"
+        title="This patient already has an account or record"
         message={
           duplicatePopup && (
             <div className="space-y-2">
-              <p>May nakita kaming kapareho ng pangalan:</p>
+              <p>We found someone with the same name:</p>
               <ul className="space-y-1.5">
                 {duplicatePopup.slice(0, 5).map((m) => (
                   <li key={m.id} className="rounded-lg bg-cream-100 px-3 py-2 text-forest-950">
@@ -2578,7 +2917,7 @@ export default function AdminPatients({ readOnly = false }) {
                       {typeof m.visit_count === "number"
                         ? m.visit_count > 0
                           ? ` · ${m.visit_count} visit${m.visit_count === 1 ? "" : "s"}`
-                          : " · may account pero wala pang record"
+                          : " · has an account but no records yet"
                         : ""}
                     </span>
                     {duplicatePopup.length > 1 && (
@@ -2587,21 +2926,22 @@ export default function AdminPatients({ readOnly = false }) {
                         onClick={() => openExistingFromPopup(m)}
                         className="ml-2 rounded-full bg-forest-900 px-3 py-1 text-xs font-semibold text-cream-50 hover:bg-forest-800"
                       >
-                        Buksan
+                        Open
                       </button>
                     )}
                   </li>
                 ))}
               </ul>
               <p>
-                Buksan ang existing record para hindi madoble, o ituloy ang bagong record kung ibang tao talaga ito.
+                Open the existing record to avoid a duplicate, or continue with the new record if this is really a
+                different person.
               </p>
             </div>
           )
         }
-        confirmLabel="Buksan ang existing record"
-        secondaryLabel="Ituloy ang bagong record"
-        cancelLabel="Balik sa form"
+        confirmLabel="Open existing record"
+        secondaryLabel="Continue new record"
+        cancelLabel="Back to form"
         onConfirm={() => openExistingFromPopup(duplicatePopup[0])}
         onSecondary={continueNewRecordAnyway}
         onCancel={dismissDuplicatePopup}

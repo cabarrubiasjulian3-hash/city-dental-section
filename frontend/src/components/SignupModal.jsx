@@ -39,8 +39,19 @@ export default function SignupModal({ isOpen, onClose, onSwitchToLogin }) {
   // account isn't logged in right away — it needs admin confirmation first.
   const [doctorPendingMessage, setDoctorPendingMessage] = useState("");
 
+  // Pregnancy only applies to female patients: while Sex is "Male" the
+  // checkbox can't be ticked.
+  const isMale = form.sex === "Male";
+
   function update(field) {
     return (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
+  }
+
+  // Changing Sex to Male also clears "pregnant", so a box that was ticked
+  // before switching can't stay ticked (and be submitted) by accident.
+  function updateSex(e) {
+    const sex = e.target.value;
+    setForm((f) => ({ ...f, sex, is_pregnant: sex === "Male" ? false : f.is_pregnant }));
   }
 
   function updateDoctor(field) {
@@ -81,7 +92,12 @@ export default function SignupModal({ isOpen, onClose, onSwitchToLogin }) {
       // existing records are stored in — that's what lets the backend
       // auto-match this signup to a record the front desk already logged.
       const { confirmPassword, ...patientForm } = form;
-      const result = await register({ ...patientForm, name: composeFullName(patientForm) });
+      const result = await register({
+        ...patientForm,
+        // Safety net: a male patient is never submitted as pregnant.
+        is_pregnant: patientForm.sex === "Male" ? false : patientForm.is_pregnant,
+        name: composeFullName(patientForm),
+      });
       onClose();
       navigate("/patient", {
         state: { welcome: { matched: result.matched, message: result.message } },
@@ -190,7 +206,7 @@ export default function SignupModal({ isOpen, onClose, onSwitchToLogin }) {
             <label className="block text-sm font-semibold text-ink-900 mb-1">Sex</label>
             <select
               value={form.sex}
-              onChange={update("sex")}
+              onChange={updateSex}
               className="w-full border border-[#c9c9c9] rounded-lg px-3 py-2 outline-none focus:border-forest-700"
             >
               <option value="">Select</option>
@@ -219,12 +235,17 @@ export default function SignupModal({ isOpen, onClose, onSwitchToLogin }) {
 
           <ModalField label="Occupation" value={form.occupation} onChange={update("occupation")} />
 
-          <label className="sm:col-span-2 flex items-center gap-2 text-sm text-ink-900">
+          <label
+            className={`sm:col-span-2 flex items-center gap-2 text-sm ${
+              isMale ? "text-ink-900/40 cursor-not-allowed" : "text-ink-900"
+            }`}
+          >
             <input
               type="checkbox"
               checked={form.is_pregnant}
+              disabled={isMale}
               onChange={(e) => setForm((f) => ({ ...f, is_pregnant: e.target.checked }))}
-              className="w-4 h-4"
+              className={`w-4 h-4 ${isMale ? "cursor-not-allowed" : ""}`}
             />
             I am currently pregnant
           </label>

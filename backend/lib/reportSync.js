@@ -1,5 +1,6 @@
 import db from "../db.js";
 import { calcAge } from "./age.js";
+import { flagsFromSnapshot } from "./patientType.js";
 import { CATEGORY_FIELDS } from "../routes/monthlyReports.js";
 
 // Every service record logged against a patient in Patient Management is
@@ -30,15 +31,20 @@ function calcAgeMonths(birthdate) {
 // Decide which single CATEGORY_FIELDS column (e.g. "adults_f") a patient's
 // visit should be tallied under. Returns null if there isn't enough
 // information (missing sex, and not pregnant) to place them anywhere.
-export function fieldForPatient(patient) {
+// `patientType` is the snapshot saved on the service record ("PWD,Senior,..."
+// or "none"). When present it wins over the patient's CURRENT flags, so a visit
+// is counted under the type the patient had at that visit. Old records without
+// one fall back to the current flags.
+export function fieldForPatient(patient, patientType) {
   if (!patient) return null;
   const sex = patient.sex === "Female" ? "f" : patient.sex === "Male" ? "m" : null;
+  const flags = flagsFromSnapshot(patientType) || patient;
 
-  if (patient.is_pregnant) return "pregnant_f"; // paper form's Pregnant Woman column is female-only
+  if (flags.is_pregnant && patient.sex !== "Male") return "pregnant_f"; // paper form's Pregnant Woman column is female-only
 
   if (!sex) return null; // can't pick an M/F column without a sex on file
 
-  if (patient.is_senior_citizen) return `senior_${sex}`;
+  if (flags.is_senior_citizen) return `senior_${sex}`;
 
   const months = calcAgeMonths(patient.birthdate);
   if (months == null) return null; // no birthdate on file — can't place by age
@@ -71,8 +77,8 @@ function bumpField(month, scope, scopeName, field, delta) {
 
 // Tallies +1 into the Monthly Report for this visit and returns the snapshot
 // to store on the dental_records row, so it can be reversed exactly later.
-export function applyServiceRecord({ patient, recordDate, dentist }) {
-  const field = fieldForPatient(patient);
+export function applyServiceRecord({ patient, recordDate, dentist, patientType }) {
+  const field = fieldForPatient(patient, patientType);
   if (!field || !recordDate) {
     return { report_month: null, report_field: null, report_barangay: null, report_dentist: null };
   }

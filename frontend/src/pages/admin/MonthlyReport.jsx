@@ -101,6 +101,13 @@ const GROUP_BY = [
   { key: "services", label: "Services", column: "Service" },
 ];
 
+// Patient-type checkboxes (same fields as the check boxes in Patient Management).
+const PATIENT_FLAGS = [
+  { key: "is_pwd", label: "PWD" },
+  { key: "is_senior_citizen", label: "Senior Citizen" },
+  { key: "is_pregnant", label: "Pregnant" },
+];
+
 // Options for the From / To month boxes ("01".."12" -> January..December).
 const MONTH_OPTIONS = Array.from({ length: 12 }, (_, i) => ({
   value: String(i + 1).padStart(2, "0"),
@@ -122,6 +129,81 @@ const monthNameOf = (ym) => new Date(Number(ym.slice(0, 4)), Number(ym.slice(5, 
 
 // Names are stored either with or without "Dr." — always show exactly one.
 const drName = (n) => `Dr. ${String(n).replace(/^dr\.?\s+/i, "")}`;
+
+// ---------------------------------------------------------------------------
+// "All" support: pick a month and/or a year, or leave either one on "All".
+//   Month + Year -> that month            Month only -> that month in every year
+//   Year only    -> every month of it     All + All  -> every record
+// The API gives one month per request, so the months are fetched (a few at a time) and added up.
+const START_WITH_ALL = false; // true = the page opens on All / All instead of this month
+const ALL_YEARS_BACK = 5; // "All years" = this year and the 5 before it
+const ALL_OPTION = { value: "", label: "All" };
+const MONTH_OPTIONS_ALL = [ALL_OPTION, ...MONTH_OPTIONS];
+const YEAR_OPTIONS = [
+  ALL_OPTION,
+  ...Array.from({ length: 12 }, (_, i) => String(new Date().getFullYear() + 1 - i)).map((y) => ({ value: y, label: y })),
+];
+
+// ["2026-07", ...] for the chosen month range ("" = all 12) in the chosen year ("" = all years).
+// For "all years", months that have not happened yet are skipped.
+function periodMonthList(fromMonth, toMonth, year) {
+  const now = new Date();
+  const thisYear = now.getFullYear();
+  const nowYm = `${thisYear}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const years = year
+    ? [String(year)]
+    : Array.from({ length: ALL_YEARS_BACK + 1 }, (_, i) => String(thisYear - ALL_YEARS_BACK + i));
+  const list = years.flatMap((y) => monthsBetween(fromMonth || "01", fromMonth ? toMonth : "12", y));
+  return year ? list : list.filter((ym) => ym <= nowYm);
+}
+
+// Text shown in the page headings: "OCTOBER 2026", "OCTOBER · ALL YEARS", "ALL MONTHS 2026", "ALL RECORDS".
+function periodLabel(monthSel, yearSel) {
+  if (monthSel && yearSel) return formatMonthLabel(`${yearSel}-${monthSel}`);
+  if (monthSel) return `${monthNameOf(`2000-${monthSel}`)} · ALL YEARS`;
+  if (yearSel) return `ALL MONTHS ${yearSel}`;
+  return "ALL RECORDS";
+}
+
+// Runs fn over items, a few at a time (so "All" does not fire hundreds of requests at once).
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
+// Adds the monthly rows together (same dentist + activity, or same barangay).
+const SUM_FIELDS = [...CATEGORY_GROUPS.flatMap(fieldsFor), "total"];
+function mergeRows(lists, keyOf) {
+  if (lists.length === 1) return lists[0];
+  const map = new Map();
+  for (const rows of lists) {
+    for (const r of rows) {
+      const k = keyOf(r);
+      const cur = map.get(k);
+      if (!cur) {
+        map.set(k, { ...r });
+        continue;
+      }
+      for (const f of SUM_FIELDS) cur[f] = (cur[f] || 0) + (r[f] || 0);
+      if (r.projected_population != null) cur.projected_population = Math.max(Number(cur.projected_population) || 0, Number(r.projected_population) || 0);
+    }
+  }
+  return [...map.values()];
+}
+function mergeServices(lists) {
+  if (lists.length === 1) return lists[0];
+  const map = new Map();
+  for (const rows of lists) for (const r of rows) map.set(r.label, (map.get(r.label) || 0) + (Number(r.value) || 0));
+  return [...map.entries()].map(([label, value]) => ({ label, value }));
+}
 
 // ---------------------------------------------------------------------------
 // Chart under the summary table. It reads the very same rows as the table
@@ -313,7 +395,9 @@ function SuggestInput({ value, options, onSelect, placeholder, ariaLabel, width 
     setText(resetOnSelect ? "" : labelOf(value));
   }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const q = text.trim().toLowerCase().replace(/\b(barangay|brgy\.?)\b/g, "").trim();
+  // untouched box (still showing the applied choice, e.g. "All") -> list every option
+  const untouched = !resetOnSelect && text === labelOf(value);
+  const q = untouched ? "" : text.trim().toLowerCase().replace(/\b(barangay|brgy\.?)\b/g, "").trim();
   const matches = options
     .filter((o) => !q || o.label.toLowerCase().includes(q))
     .sort((a, b) => Number(b.label.toLowerCase().startsWith(q)) - Number(a.label.toLowerCase().startsWith(q)));
@@ -327,11 +411,16 @@ function SuggestInput({ value, options, onSelect, placeholder, ariaLabel, width 
     const t = e.target.value;
     setText(t);
     setOpen(true);
-    if (!t.trim() && value && !resetOnSelect) onSelect(""); // emptied the box -> no filter
   }
   function handleBlur() {
     setOpen(false);
     if (resetOnSelect) return setText("");
+    if (!text.trim()) {
+      // left the box empty -> back to "All" (no filter)
+      if (value) onSelect("");
+      setText(labelOf(""));
+      return;
+    }
     const exact = options.find((o) => o.label.toLowerCase() === text.trim().toLowerCase());
     if (exact) {
       if (exact.value !== value) onSelect(exact.value);
@@ -347,7 +436,10 @@ function SuggestInput({ value, options, onSelect, placeholder, ariaLabel, width 
         type="text"
         value={text}
         onChange={handleChange}
-        onFocus={() => setOpen(true)}
+        onFocus={(e) => {
+          setOpen(true);
+          e.target.select(); // typing replaces the shown value
+        }}
         onBlur={handleBlur}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
@@ -761,14 +853,14 @@ function SexCell({ sex, value, strong = false }) {
 }
 
 // Form B: the overall report (Quarterly / Annual / any From–To range).
-function FormTableB({ groups, months, sexRows }) {
+function FormTableB({ groups, months, sexRows, lead = "Month" }) {
   const bySex = (t, x) => sexTotal(t, groups, x);
   const monthTotal = (t) => sexRows.reduce((sum, y) => sum + bySex(t, y), 0);
   const grand = months.reduce((sum, mo) => sum + monthTotal(mo.t), 0);
   return (
     <table className="w-full min-w-[1000px] border-collapse text-xs" style={TABLE_STYLE}>
       <ColGroup count={groups.length + 3} />
-      <FormHead groups={groups} mf={false} lead="Month" />
+      <FormHead groups={groups} mf={false} lead={lead} />
       <tbody>
         {months.flatMap((mo) =>
           sexRows.map((x, si) => (
@@ -957,7 +1049,7 @@ function OfficialReport({ model, loading }) {
       <FormTitle model={model} />
       <div className="overflow-x-auto">
         {model.mode === "A" && <FormTableA groups={model.groups} rows={model.rows} lead={model.lead} />}
-        {model.mode === "B" && <FormTableB groups={model.groups} months={model.months} sexRows={model.sexRows} />}
+        {model.mode === "B" && <FormTableB groups={model.groups} months={model.months} sexRows={model.sexRows} lead={model.lead} />}
         {model.mode === "C" && <FormTableC groups={model.groups} rows={model.rows} monthLabel={model.period} />}
       </div>
       <FormFooter noted={model.mode === "B"} />
@@ -1019,15 +1111,15 @@ const PRINT_CSS = `@media print {
 }`;
 
 // ---------------------------------------------------------------------------
-// Bottom of the page: the By Dentist / By Barangay tabs, the filters under them,
+// Bottom of the page: the Dentist Report / Barangay Report tabs, the filters under them,
 // and the report laid out like the paper e-FHSIS form. It loads its own data, so
 // it never touches the filters or the report at the top of the page.
 // ---------------------------------------------------------------------------
 function ReportFormSection({ tab, setTab }) {
   const nowYm = new Date().toISOString().slice(0, 7);
-  const [fromMonth, setFromMonth] = useState(nowYm.slice(5, 7)); // "01".."12"
+  const [fromMonth, setFromMonth] = useState(START_WITH_ALL ? "" : nowYm.slice(5, 7)); // "01".."12", "" = All
   const [toMonth, setToMonth] = useState(""); // "" = just the one month above
-  const [year, setYear] = useState(nowYm.slice(0, 4));
+  const [year, setYear] = useState(START_WITH_ALL ? "" : nowYm.slice(0, 4)); // "" = All
   const [doctor, setDoctor] = useState("");
   const [barangay, setBarangay] = useState("");
   const [sex, setSex] = useState("all"); // "all" | "m" | "f"
@@ -1037,19 +1129,15 @@ function ReportFormSection({ tab, setTab }) {
   const [error, setError] = useState("");
   const [exporting, setExporting] = useState(false);
 
-  const thisYear = new Date().getFullYear();
-  const yearOptions = Array.from({ length: 12 }, (_, i) => String(thisYear + 1 - i)).map((y) => ({ value: y, label: y }));
-  const months = useMemo(() => monthsBetween(fromMonth, toMonth, year), [fromMonth, toMonth, year]);
+  const months = useMemo(() => periodMonthList(fromMonth, toMonth, year), [fromMonth, toMonth, year]);
   const multi = months.length > 1;
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError("");
-    Promise.all(
-      months.map((m) =>
-        Promise.all([api.get(`/monthly-reports?month=${m}&scope=dentist`), api.get(`/monthly-reports?month=${m}&scope=barangay`)])
-      )
+    mapLimit(months, 6, (m) =>
+      Promise.all([api.get(`/monthly-reports?month=${m}&scope=dentist`), api.get(`/monthly-reports?month=${m}&scope=barangay`)])
     )
       .then((results) => {
         if (!cancelled) setData(results.map(([d, b], i) => ({ month: months[i], dentistRows: d.rows, barangayRows: b.rows })));
@@ -1081,27 +1169,50 @@ function ReportFormSection({ tab, setTab }) {
   const model = useMemo(() => {
     const first = months[0];
     const last = months[months.length - 1];
-    const period = multi ? `${monthNameOf(first)}-${monthNameOf(last)} ${year}` : `${monthNameOf(first)}-${year}`;
+    const years = [...new Set(months.map((m) => m.slice(0, 4)))];
+    const multiYear = years.length > 1;
+    const nameOfMonth = (mm) => monthNameOf(`2000-${mm}`);
+    let period;
+    if (!multi) period = `${monthNameOf(first)}-${first.slice(0, 4)}`;
+    else if (!multiYear) period = `${monthNameOf(first)}-${monthNameOf(last)} ${years[0]}`;
+    else {
+      const ofFirstYear = months.filter((m) => m.startsWith(years[0]));
+      const monthText = fromMonth
+        ? ofFirstYear.length > 1
+          ? `${monthNameOf(ofFirstYear[0])}-${monthNameOf(ofFirstYear[ofFirstYear.length - 1])}`
+          : nameOfMonth(fromMonth)
+        : "ALL MONTHS";
+      period = `${monthText} ${years[0]}-${years[years.length - 1]}`;
+    }
     const base = { groups, period };
     const rowsOf = (md) =>
       tab === "dentist"
         ? doctor ? md.dentistRows.filter((r) => r.scope_name === doctor) : md.dentistRows
         : barangay ? md.barangayRows.filter((r) => r.scope_name === barangay) : md.barangayRows;
 
-    // Form B — the overall report: a Male/Female row pair for every month.
+    // Form B — the overall report: a Male/Female row pair for every month
+    // (or for every year when the report covers several years).
     if (multi) {
-      const title =
-        months.length === 12
-          ? "Annual Report on Dental Services e-FHSIS –"
-          : months.length === 3
-          ? "Quarterly Report on Dental Services e-FHSIS –"
-          : "Report on Dental Services e-FHSIS –";
+      const title = multiYear
+        ? "Report on Dental Services e-FHSIS –"
+        : months.length === 12
+        ? "Annual Report on Dental Services e-FHSIS –"
+        : months.length === 3
+        ? "Quarterly Report on Dental Services e-FHSIS –"
+        : "Report on Dental Services e-FHSIS –";
       return {
         ...base,
         mode: "B",
         title,
+        lead: multiYear ? "Year" : "Month",
         sexRows: sex === "all" ? ["m", "f"] : [sex],
-        months: data.map((md) => ({ key: md.month, label: monthNameOf(md.month), t: sumRows(rowsOf(md), groups, filtered) })),
+        months: multiYear
+          ? [...new Set(data.map((md) => md.month.slice(0, 4)))].map((y) => ({
+              key: y,
+              label: y,
+              t: sumRows(data.filter((md) => md.month.startsWith(y)).flatMap(rowsOf), groups, filtered),
+            }))
+          : data.map((md) => ({ key: md.month, label: monthNameOf(md.month), t: sumRows(rowsOf(md), groups, filtered) })),
       };
     }
     const md = data[0];
@@ -1116,7 +1227,7 @@ function ReportFormSection({ tab, setTab }) {
         ...base,
         mode: "C",
         groups: cGroups,
-        period: `MONTH OF ${monthNameOf(first)} ${year}`,
+        period: `MONTH OF ${monthNameOf(first)} ${first.slice(0, 4)}`,
         rows: rowsOf(md).map((r) => ({
           key: r.id ?? r.scope_name,
           label: r.scope_name,
@@ -1154,7 +1265,7 @@ function ReportFormSection({ tab, setTab }) {
       lead: "",
       rows: [...byName.entries()].map(([name, rows]) => ({ key: name, label: drName(name), t: sumRows(rows, groups, filtered) })),
     };
-  }, [tab, doctor, barangay, sex, ageKeys, groups, filtered, multi, months, year, data]);
+  }, [tab, doctor, barangay, sex, ageKeys, groups, filtered, multi, months, fromMonth, toMonth, year, data]);
 
   function clearAll() {
     setDoctor("");
@@ -1192,7 +1303,7 @@ function ReportFormSection({ tab, setTab }) {
               tab === "dentist" ? "bg-brand-900 text-brand-50" : "bg-cream-200 text-forest-800"
             }`}
           >
-            By Dentist
+            Dentist Report
           </button>
           <button
             onClick={() => setTab("barangay")}
@@ -1200,7 +1311,7 @@ function ReportFormSection({ tab, setTab }) {
               tab === "barangay" ? "bg-brand-900 text-brand-50" : "bg-cream-200 text-forest-800"
             }`}
           >
-            By Barangay
+            Barangay Report
           </button>
         </div>
       </div>
@@ -1220,9 +1331,9 @@ function ReportFormSection({ tab, setTab }) {
             Month (from)
             <SuggestInput
               value={fromMonth}
-              onSelect={(v) => v && setFromMonth(v)}
-              options={MONTH_OPTIONS}
-              placeholder="Type month"
+              onSelect={setFromMonth}
+              options={MONTH_OPTIONS_ALL}
+              placeholder="All"
               width="w-28"
             />
           </label>
@@ -1241,7 +1352,7 @@ function ReportFormSection({ tab, setTab }) {
 
           <label className="flex items-center gap-1.5">
             Year
-            <SuggestInput value={year} onSelect={(y) => y && setYear(y)} options={yearOptions} placeholder="Year" width="w-20" />
+            <SuggestInput value={year} onSelect={setYear} options={YEAR_OPTIONS} placeholder="All" width="w-20" />
           </label>
 
           {tab === "dentist" ? (
@@ -1250,8 +1361,8 @@ function ReportFormSection({ tab, setTab }) {
               <SuggestInput
                 value={doctor}
                 onSelect={setDoctor}
-                options={doctorNames.map((n) => ({ value: n, label: drName(n) }))}
-                placeholder="Type doctor"
+                options={[ALL_OPTION, ...doctorNames.map((n) => ({ value: n, label: drName(n) }))]}
+                placeholder="All"
                 width="w-40"
               />
             </label>
@@ -1261,8 +1372,8 @@ function ReportFormSection({ tab, setTab }) {
               <SuggestInput
                 value={barangay}
                 onSelect={setBarangay}
-                options={barangayNames.map((n) => ({ value: n, label: n }))}
-                placeholder="Type barangay"
+                options={[ALL_OPTION, ...barangayNames.map((n) => ({ value: n, label: n }))]}
+                placeholder="All"
                 width="w-40"
               />
             </label>
@@ -1273,11 +1384,8 @@ function ReportFormSection({ tab, setTab }) {
             <SuggestInput
               value={sex === "all" ? "" : sex}
               onSelect={(v) => setSex(v || "all")}
-              options={[
-                { value: "m", label: "Male" },
-                { value: "f", label: "Female" },
-              ]}
-              placeholder="Type sex"
+              options={[ALL_OPTION, { value: "m", label: "Male" }, { value: "f", label: "Female" }]}
+              placeholder="All"
               width="w-24"
             />
           </label>
@@ -1290,7 +1398,7 @@ function ReportFormSection({ tab, setTab }) {
                 resetOnSelect
                 onSelect={(key) => key && !ageKeys.includes(key) && setAgeKeys((cur) => [...cur, key])}
                 options={CATEGORY_GROUPS.filter((g) => !ageKeys.includes(g.key)).map((g) => ({ value: g.key, label: GROUP_SHORT[g.key] }))}
-                placeholder="Type age group"
+                placeholder="All"
                 width="w-36"
               />
             </label>
@@ -1350,7 +1458,12 @@ function ReportFormSection({ tab, setTab }) {
 
 export default function AdminMonthlyReport({ readOnly = false }) {
   const [tab, setTab] = useState("dentist");
-  const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [monthSel, setMonthSel] = useState(() => (START_WITH_ALL ? "" : String(new Date().getMonth() + 1).padStart(2, "0")));
+  const [yearSel, setYearSel] = useState(() => (START_WITH_ALL ? "" : String(new Date().getFullYear())));
+  const periodMonths = useMemo(() => periodMonthList(monthSel, "", yearSel), [monthSel, yearSel]);
+  const periodKey = periodMonths.join(",");
+  const period = periodLabel(monthSel, yearSel);
+  const [loadingTop, setLoadingTop] = useState(false);
   const [dentistRows, setDentistRows] = useState([]);
   const [barangayRows, setBarangayRows] = useState([]);
   const [servicesRendered, setServicesRendered] = useState([]);
@@ -1367,24 +1480,55 @@ export default function AdminMonthlyReport({ readOnly = false }) {
   // Exact age(s), e.g. "21" or "21-24" or "21, 23, 24". The monthly tallies only
   // store age *groups*, so exact ages are answered from the patient records.
   const [ageText, setAgeText] = useState("");
+  const [flagFilter, setFlagFilter] = useState([]); // "is_pwd" | "is_senior_citizen" | "is_pregnant"
   const [patients, setPatients] = useState(null);
+  // Patient type (PWD / Senior / Pregnant) is counted per VISIT, as it was at
+  // that visit, so this list comes from the selected period's visits, not current flags.
+  const [monthVisits, setMonthVisits] = useState(null);
   const ageRanges = useMemo(() => parseAgeInput(ageText), [ageText]);
   const exactAgeOn = Array.isArray(ageRanges) && ageRanges.length > 0;
+  const patientListOn = exactAgeOn || flagFilter.length > 0;
+  const byVisit = flagFilter.length > 0; // patient-type filter => list the period's visits
   useEffect(() => {
-    if (ageText.trim() && patients === null) {
+    if (ageText.trim() && !byVisit && patients === null) {
       api.get("/patients").then(setPatients).catch(() => setPatients([]));
     }
-  }, [ageText, patients]);
+  }, [ageText, byVisit, patients]);
+  useEffect(() => {
+    if (!byVisit) return;
+    let alive = true;
+    setMonthVisits(null);
+    mapLimit(periodMonths, 6, (m) => api.get(`/monthly-reports/visits?month=${m}`))
+      .then((rs) => alive && setMonthVisits(rs.flatMap((r) => r.visits || [])))
+      .catch(() => alive && setMonthVisits([]));
+    return () => {
+      alive = false;
+    };
+  }, [byVisit, periodKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const listSource = byVisit ? monthVisits : patients;
   const agePatients = useMemo(() => {
-    if (!exactAgeOn || !patients) return [];
+    if (!patientListOn || !listSource) return [];
     const lc = (v) => String(v || "").toLowerCase();
-    return patients
-      .filter((p) => p.age != null && p.age !== "" && ageRanges.some(([lo, hi]) => Number(p.age) >= lo && Number(p.age) <= hi))
+    return listSource
+      .map((p) =>
+        byVisit
+          ? { ...p, id: p.record_id, latest_dentist: p.dentist, latest_procedure: p.procedure }
+          : { ...p, patient_type: null }
+      )
+      .filter((p) => !exactAgeOn || (p.age != null && p.age !== "" && ageRanges.some(([lo, hi]) => Number(p.age) >= lo && Number(p.age) <= hi)))
+      .filter((p) => flagFilter.every((k) => p[k]))
       .filter((p) => !barangayFilter || lc(p.barangay) === lc(barangayFilter))
       .filter((p) => !dentistFilter || lc(p.latest_dentist).includes(lc(dentistFilter)))
       .filter((p) => sexFilter === "all" || lc(p.sex).startsWith(sexFilter))
       .sort((a, b) => Number(a.age) - Number(b.age) || String(a.name).localeCompare(String(b.name)));
-  }, [patients, exactAgeOn, ageRanges, barangayFilter, dentistFilter, sexFilter]);
+  }, [listSource, byVisit, patientListOn, exactAgeOn, ageRanges, flagFilter, barangayFilter, dentistFilter, sexFilter]);
+  const listTitle = [
+    "Patients",
+    exactAgeOn && `aged ${ageText.trim()}`,
+    flagFilter.length > 0 && `(${flagFilter.map((k) => PATIENT_FLAGS.find((f) => f.key === k).label).join(" + ")})`,
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   // Columns (age groups x sex) that are currently visible/summed.
   const groups = useMemo(
@@ -1396,21 +1540,29 @@ export default function AdminMonthlyReport({ readOnly = false }) {
   );
   const filtered = ageFilter.length > 0 || sexFilter !== "all";
 
-  function load() {
+  useEffect(() => {
+    let alive = true;
     setError("");
-    Promise.all([
-      api.get(`/monthly-reports?month=${month}&scope=dentist`),
-      api.get(`/monthly-reports?month=${month}&scope=barangay`),
-      api.get(`/monthly-reports/services-rendered?month=${month}`),
-    ])
-      .then(([d, b, sr]) => {
-        setDentistRows(d.rows);
-        setBarangayRows(b.rows);
-        setServicesRendered(sr.servicesRendered);
+    setLoadingTop(true);
+    mapLimit(periodMonths, 6, (m) =>
+      Promise.all([
+        api.get(`/monthly-reports?month=${m}&scope=dentist`),
+        api.get(`/monthly-reports?month=${m}&scope=barangay`),
+        api.get(`/monthly-reports/services-rendered?month=${m}`),
+      ])
+    )
+      .then((res) => {
+        if (!alive) return;
+        setDentistRows(mergeRows(res.map(([d]) => d.rows), (r) => `${r.scope_name}|${r.activity_type || ""}`));
+        setBarangayRows(mergeRows(res.map(([, b]) => b.rows), (r) => r.scope_name));
+        setServicesRendered(mergeServices(res.map(([, , sr]) => sr.servicesRendered)));
       })
-      .catch((err) => setError(err.message));
-  }
-  useEffect(load, [month]);
+      .catch((err) => alive && setError(err.message))
+      .finally(() => alive && setLoadingTop(false));
+    return () => {
+      alive = false;
+    };
+  }, [periodKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const dentistNames = useMemo(() => [...new Set(dentistRows.map((r) => r.scope_name))], [dentistRows]);
   const shownDentistRows = useMemo(
@@ -1446,15 +1598,17 @@ export default function AdminMonthlyReport({ readOnly = false }) {
     groupBy !== "dentist" && dentistFilter,
     sexFilter !== "all",
     ageText.trim(),
+    flagFilter.length > 0,
     groupBy !== "age" && ageFilter.length > 0,
   ].filter(Boolean).length;
-  const anyFilter = Boolean(barangayFilter || dentistFilter || filtered || ageText.trim());
+  const anyFilter = Boolean(barangayFilter || dentistFilter || filtered || ageText.trim() || flagFilter.length);
   function clearFilters() {
     setBarangayFilter("");
     setDentistFilter("");
     setAgeFilter([]);
     setSexFilter("all");
     setAgeText("");
+    setFlagFilter([]);
   }
   function toggleAge(key) {
     setAgeFilter((cur) => (cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]));
@@ -1464,7 +1618,7 @@ export default function AdminMonthlyReport({ readOnly = false }) {
   if (barangayFilter && groupBy === "dentist") notes.push("The barangay filter doesn't apply when grouped by dentist (those are counted per doctor).");
   if (dentistFilter && groupBy === "barangay") notes.push("The doctor filter doesn't apply when grouped by barangay (barangay tallies aren't recorded per doctor).");
   if (anyFilter && groupBy === "services") notes.push("Services are counted for the whole month and aren't affected by the other filters.");
-  if (exactAgeOn) notes.push("Exact ages come from the patient records, so they're listed in the card below. The table itself only knows age groups — use the chips for that.");
+  if (patientListOn) notes.push("Patient type (PWD / Senior / Pregnant) is taken from each visit in the selected period, so the visits are listed in the card below. Exact ages come from the patient records. The table itself only knows age groups.");
 
   // The single summary table: one row per item of the chosen category.
   const summary = useMemo(() => {
@@ -1515,7 +1669,7 @@ export default function AdminMonthlyReport({ readOnly = false }) {
             Reports on Dental Services (e-FHSIS)
           </h1>
           <p className="text-sm font-medium text-forest-700 mt-1">
-            City Dental Office · City of Tayabas, Province of Quezon · {formatMonthLabel(month)}
+            City Dental Office · City of Tayabas, Province of Quezon · {period}
           </p>
         </div>
       </div>
@@ -1526,12 +1680,12 @@ export default function AdminMonthlyReport({ readOnly = false }) {
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-forest-700">
           <label className="flex items-center gap-1.5">
             Month
-            <input
-              type="month"
-              value={month}
-              onChange={(e) => setMonth(e.target.value)}
-              className="rounded-lg border border-cream-200 bg-cream-100 px-2 py-1 text-xs text-forest-950"
-            />
+            <SuggestInput value={monthSel} onSelect={setMonthSel} options={MONTH_OPTIONS_ALL} placeholder="All" ariaLabel="Month (All = every month)" width="w-28" />
+          </label>
+
+          <label className="flex items-center gap-1.5">
+            Year
+            <SuggestInput value={yearSel} onSelect={setYearSel} options={YEAR_OPTIONS} placeholder="All" ariaLabel="Year (All = every year)" width="w-20" />
           </label>
 
           <label className="flex items-center gap-1.5">
@@ -1572,6 +1726,8 @@ export default function AdminMonthlyReport({ readOnly = false }) {
               Clear
             </button>
           )}
+
+          {loadingTop && <span className="text-forest-500">Loading…</span>}
         </div>
 
         {filtersOpen && (
@@ -1582,8 +1738,8 @@ export default function AdminMonthlyReport({ readOnly = false }) {
                 <SuggestInput
                   value={barangayFilter}
                   onSelect={setBarangayFilter}
-                  options={barangayRows.map((r) => ({ value: r.scope_name, label: r.scope_name }))}
-                  placeholder="Type barangay"
+                  options={[ALL_OPTION, ...barangayRows.map((r) => ({ value: r.scope_name, label: r.scope_name }))]}
+                  placeholder="All"
                   width="w-40"
                 />
               </label>
@@ -1594,8 +1750,8 @@ export default function AdminMonthlyReport({ readOnly = false }) {
                 <SuggestInput
                   value={dentistFilter}
                   onSelect={setDentistFilter}
-                  options={dentistNames.map((n) => ({ value: n, label: drName(n) }))}
-                  placeholder="Type doctor"
+                  options={[ALL_OPTION, ...dentistNames.map((n) => ({ value: n, label: drName(n) }))]}
+                  placeholder="All"
                   width="w-40"
                 />
               </label>
@@ -1605,11 +1761,8 @@ export default function AdminMonthlyReport({ readOnly = false }) {
               <SuggestInput
                 value={sexFilter === "all" ? "" : sexFilter}
                 onSelect={(v) => setSexFilter(v || "all")}
-                options={[
-                  { value: "m", label: "Male" },
-                  { value: "f", label: "Female" },
-                ]}
-                placeholder="Male / Female"
+                options={[ALL_OPTION, { value: "m", label: "Male" }, { value: "f", label: "Female" }]}
+                placeholder="All"
                 width="w-28"
               />
             </label>
@@ -1620,9 +1773,9 @@ export default function AdminMonthlyReport({ readOnly = false }) {
                 inputMode="numeric"
                 value={ageText}
                 onChange={(e) => setAgeText(e.target.value)}
-                placeholder="21 or 21-24"
-                aria-label="Type an exact age or age range"
-                className="w-28 rounded-lg border border-cream-200 bg-cream-100 px-2 py-1 text-xs text-forest-950"
+                placeholder="All (or 21, 21-24)"
+                aria-label="Type an exact age or age range (empty = all ages)"
+                className="w-36 rounded-lg border border-cream-200 bg-cream-100 px-2 py-1 text-xs text-forest-950"
               />
             </label>
             {ageRanges === null && <span className="text-red-600">Use 21, 21-24 or 21, 23</span>}
@@ -1635,7 +1788,7 @@ export default function AdminMonthlyReport({ readOnly = false }) {
                     resetOnSelect
                     onSelect={(key) => key && !ageFilter.includes(key) && toggleAge(key)}
                     options={CATEGORY_GROUPS.filter((g) => !ageFilter.includes(g.key)).map((g) => ({ value: g.key, label: GROUP_SHORT[g.key] }))}
-                    placeholder="Type age group"
+                    placeholder="All"
                     width="w-36"
                   />
                 </label>
@@ -1649,6 +1802,25 @@ export default function AdminMonthlyReport({ readOnly = false }) {
                 ))}
               </div>
             )}
+            <div className="flex items-center gap-3">
+              <span>Patient type</span>
+              <label className="flex items-center gap-1">
+                <input type="checkbox" checked={flagFilter.length === 0} onChange={() => setFlagFilter([])} />
+                All
+              </label>
+              {PATIENT_FLAGS.map((f) => (
+                <label key={f.key} className="flex items-center gap-1">
+                  <input
+                    type="checkbox"
+                    checked={flagFilter.includes(f.key)}
+                    onChange={() =>
+                      setFlagFilter((cur) => (cur.includes(f.key) ? cur.filter((k) => k !== f.key) : [...cur, f.key]))
+                    }
+                  />
+                  {f.label}
+                </label>
+              ))}
+            </div>
             <label className="flex items-center gap-1.5">
               View as
               <select
@@ -1675,14 +1847,14 @@ export default function AdminMonthlyReport({ readOnly = false }) {
         )}
       </div>
 
-      {exactAgeOn && (
+      {patientListOn && (
         <Card
           className="print:hidden"
-          title={`Patients aged ${ageText.trim()}`}
+          title={listTitle}
           subtitle={
-            patients === null
+            listSource === null
               ? "Loading patient records…"
-              : `${agePatients.length} patient${agePatients.length === 1 ? "" : "s"} · ${
+              : `${agePatients.length} ${byVisit ? "visit" : "patient"}${agePatients.length === 1 ? "" : "s"}${byVisit ? ` in ${period}` : ""} · ${
                   agePatients.filter((p) => String(p.sex || "").toLowerCase().startsWith("m")).length
                 } male · ${agePatients.filter((p) => String(p.sex || "").toLowerCase().startsWith("f")).length} female`
           }
@@ -1696,8 +1868,9 @@ export default function AdminMonthlyReport({ readOnly = false }) {
                     <th className="py-2 font-semibold">Age</th>
                     <th className="py-2 font-semibold">Sex</th>
                     <th className="py-2 font-semibold">Barangay</th>
+                    <th className="py-2 font-semibold">Patient type</th>
                     <th className="py-2 font-semibold">Doctor</th>
-                    <th className="py-2 font-semibold">Latest procedure</th>
+                    <th className="py-2 font-semibold">{byVisit ? "Visit" : "Latest procedure"}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1707,15 +1880,33 @@ export default function AdminMonthlyReport({ readOnly = false }) {
                       <td className="py-2 text-forest-700">{p.age}</td>
                       <td className="py-2 text-forest-700">{p.sex || "—"}</td>
                       <td className="py-2 text-forest-700">{p.barangay || "—"}</td>
+                      <td className="py-2 text-forest-700">
+                        {(() => {
+                          const tags = [p.is_pwd && "PWD", p.is_senior_citizen && "Senior", p.is_pregnant && "Pregnant"].filter(Boolean);
+                          return tags.length ? (
+                            <span className="inline-flex flex-wrap gap-1">
+                              {tags.map((t) => (
+                                <span key={t} className="rounded-full bg-brand-900 text-brand-50 text-[10px] font-semibold px-2 py-0.5">
+                                  {t}
+                                </span>
+                              ))}
+                            </span>
+                          ) : (
+                            "—"
+                          );
+                        })()}
+                      </td>
                       <td className="py-2 text-forest-700">{p.latest_dentist || "—"}</td>
-                      <td className="py-2 text-forest-700">{p.latest_procedure || "—"}</td>
+                      <td className="py-2 text-forest-700">
+                        {byVisit ? `${p.record_date || ""} · ${p.latest_procedure || "—"}` : p.latest_procedure || "—"}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           ) : (
-            patients !== null && <EmptyState>No patients match this age with the current barangay / doctor / sex filters.</EmptyState>
+            listSource !== null && <EmptyState>No {byVisit ? "visits" : "patients"} match the current filters.</EmptyState>
           )}
         </Card>
       )}
@@ -1725,7 +1916,7 @@ export default function AdminMonthlyReport({ readOnly = false }) {
       <Card
         className="print:hidden"
         title={`Report by ${GROUP_BY.find((g) => g.key === groupBy).label}`}
-        subtitle={`${summary.rows.length} row${summary.rows.length === 1 ? "" : "s"} · ${formatMonthLabel(month)}`}
+        subtitle={`${summary.rows.length} row${summary.rows.length === 1 ? "" : "s"} · ${period}`}
       >
         {summary.rows.length && reportView !== "table" ? (
           <ReportChartView rows={summary.rows} groupBy={groupBy} kind={reportView} />
@@ -1774,12 +1965,7 @@ export default function AdminMonthlyReport({ readOnly = false }) {
         )}
       </Card>
 
-      <SummaryChart
-        rows={summary.rows}
-        groupBy={groupBy}
-        title={`Chart — by ${GROUP_BY.find((g) => g.key === groupBy).label}`}
-      />
-
+      
       <ReportFormSection tab={tab} setTab={setTab} />
 
       {error && <p className="text-sm text-red-600 print:hidden">{error}</p>}

@@ -365,6 +365,12 @@ const dentalRecordColumns = db.prepare("PRAGMA table_info(dental_records)").all(
 for (const col of ["report_month", "report_field", "report_barangay", "report_dentist"]) {
   if (!dentalRecordColumns.includes(col)) db.exec(`ALTER TABLE dental_records ADD COLUMN ${col} TEXT`);
 }
+// patient_type: freezes what the patient's Patient Type (PWD / Senior
+// Citizen / Pregnant — comma-separated, or "none") was AT THIS VISIT, so a
+// later visit (e.g. the patient is no longer pregnant) never rewrites what
+// an earlier visit's record shows. Added here instead of in the original
+// CREATE TABLE so existing databases pick it up without losing data.
+if (!dentalRecordColumns.includes("patient_type")) db.exec(`ALTER TABLE dental_records ADD COLUMN patient_type TEXT`);
 
 // Lightweight migration for databases created before barangay_schedule grew
 // the target (headcount goal) and status (Upcoming/Ongoing/Completed) columns
