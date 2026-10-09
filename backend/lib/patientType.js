@@ -30,3 +30,9 @@ export function normalizePatientType(value, patient, age) {
   if (age != null && age >= 60) flags.is_senior_citizen = true;
   return snapshotFromFlags(flags);
 }
+
+// Senior Citizen follows the age: 60+ always, under 60 never. Only when the age
+// is unknown does the saved flag decide.
+export function seniorFor(flag, age) {
+  return age !== null && age !== undefined ? age >= 60 : Boolean(flag);
+}

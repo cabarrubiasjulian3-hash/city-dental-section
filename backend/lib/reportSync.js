@@ -1,6 +1,6 @@
 import db from "../db.js";
 import { calcAge } from "./age.js";
-import { flagsFromSnapshot } from "./patientType.js";
+import { flagsFromSnapshot, seniorFor } from "./patientType.js";
 import { CATEGORY_FIELDS } from "../routes/monthlyReports.js";
 
 // Every service record logged against a patient in Patient Management is
@@ -44,7 +44,8 @@ export function fieldForPatient(patient, patientType) {
 
   if (!sex) return null; // can't pick an M/F column without a sex on file
 
-  if (flags.is_senior_citizen) return `senior_${sex}`;
+  // Senior Citizen follows the age (60+); the saved flag only counts when there is no birthdate.
+  if (seniorFor(flags.is_senior_citizen, calcAge(patient.birthdate))) return `senior_${sex}`;
 
   const months = calcAgeMonths(patient.birthdate);
   if (months == null) return null; // no birthdate on file — can't place by age

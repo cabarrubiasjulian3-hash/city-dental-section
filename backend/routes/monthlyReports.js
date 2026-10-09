@@ -2,7 +2,7 @@ import { Router } from "express";
 import db from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { TAYABAS_BARANGAYS } from "../lib/barangays.js";
-import { flagsFromSnapshot } from "../lib/patientType.js";
+import { flagsFromSnapshot, seniorFor } from "../lib/patientType.js";
 
 const router = Router();
 // Admin AND doctor can read the reports — the Doctor Portal shows the same
@@ -149,7 +149,7 @@ router.get("/visits", (req, res) => {
     }
     const tags = [];
     if (flags.is_pwd) tags.push("PWD");
-    if (flags.is_senior_citizen) tags.push("Senior");
+    if (seniorFor(flags.is_senior_citizen, age)) tags.push("Senior"); // follows the age: 60+ yes, under 60 no
     if (flags.is_pregnant && r.sex !== "Male") tags.push("Pregnant");
     return {
       record_id: r.record_id,

@@ -120,6 +120,7 @@ function typeOptionsFor(sex, age) {
   return subsets
     .filter((tags) => !(sex === "Male" && tags.includes("Pregnant")))
     .filter((tags) => !(age !== null && age >= 60 && !tags.includes("Senior")))
+    .filter((tags) => !(age !== null && age < 60 && tags.includes("Senior")))
     .map((tags) => ({
       value: tags.length ? tags.join(",") : "none",
       label: tags.length ? tags.map((t) => TYPE_LABELS[t]).join(" + ") : "None",
@@ -137,21 +138,46 @@ function typeSnapshot(flags) {
   return tags.length ? tags.join(",") : "none";
 }
 
+// Senior Citizen on the patient list: follows the age (60+) when the age is known.
+const listSenior = (p) => (p.age !== null && p.age !== undefined && p.age !== "" ? Number(p.age) >= 60 : Number(p.is_senior_citizen) === 1);
+
+// Age in years on a given date (the visit date), null if it can't be worked out.
+function ageAtDate(birthdate, date) {
+  if (!birthdate || !date) return null;
+  const b = new Date(birthdate);
+  const d = new Date(date);
+  if (Number.isNaN(b.getTime()) || Number.isNaN(d.getTime())) return null;
+  let age = d.getFullYear() - b.getFullYear();
+  const m = d.getMonth() - b.getMonth();
+  if (m < 0 || (m === 0 && d.getDate() < b.getDate())) age--;
+  return age;
+}
+
+// The patient's age on the day of this service record (falls back to today's age).
+function visitAge(record, patient) {
+  const onVisit = ageAtDate(patient?.birthdate, toDateInputValue(record?.record_date));
+  return onVisit ?? patient?.age ?? ageFromBirthdate(patient?.birthdate);
+}
+
+// Patient Type flags of ONE visit: what was saved on that record (old records
+// without one use the patient's flags), plus the rules — 60+ is always Senior
+// Citizen and a male patient can't be Pregnant.
+function visitTypeFlags(snapshot, source, age, sex) {
+  const hasSnapshot = typeof snapshot === "string" && snapshot !== "";
+  const flags = hasSnapshot
+    ? { is_pwd: snapshot.includes("PWD"), is_senior_citizen: snapshot.includes("Senior"), is_pregnant: snapshot.includes("Pregnant") }
+    : { is_pwd: flagOn(source?.is_pwd), is_senior_citizen: flagOn(source?.is_senior_citizen), is_pregnant: flagOn(source?.is_pregnant) };
+  // Senior Citizen follows the age: 60+ always, under 60 never.
+  if (age !== null && age !== undefined) flags.is_senior_citizen = age >= 60;
+  if (sex === "Male") flags.is_pregnant = false;
+  return flags;
+}
+
 // `snapshot` = the Patient Type saved with a service record (what it was at that visit).
 // Old records without one fall back to the patient's current flags (`source`).
-function PatientTypeBadges({ source, snapshot }) {
-  const hasSnapshot = typeof snapshot === "string" && snapshot !== "";
-  const tags = hasSnapshot
-    ? snapshot === "none"
-      ? []
-      : snapshot.split(",").filter(Boolean)
-    : (() => {
-        const t = [];
-        if (flagOn(source?.is_pwd)) t.push("PWD");
-        if (flagOn(source?.is_senior_citizen)) t.push("Senior");
-        if (flagOn(source?.is_pregnant)) t.push("Pregnant");
-        return t;
-      })();
+function PatientTypeBadges({ source, snapshot, age }) {
+  const eff = visitTypeFlags(snapshot, source, age, source?.sex);
+  const tags = typeSnapshot(eff) === "none" ? [] : typeSnapshot(eff).split(",");
   if (!tags.length) return <span className="text-forest-500">—</span>;
   return (
     <div className="flex flex-wrap gap-1">
@@ -173,11 +199,13 @@ function PatientTypeButtons({ values, sex, age, onToggle, disabled = false, comp
       {PATIENT_FLAG_FIELDS.map(({ field, label }) => {
         const isMaleBlocked = field === "is_pregnant" && sex === "Male";
         const isAutoSenior = field === "is_senior_citizen" && age !== null && age >= 60;
-        const active = isAutoSenior ? true : isMaleBlocked ? false : !!values[field];
-        const locked = disabled || isMaleBlocked || isAutoSenior;
+        const isTooYoung = field === "is_senior_citizen" && age !== null && age < 60;
+        const active = isAutoSenior ? true : isMaleBlocked || isTooYoung ? false : !!values[field];
+        const locked = disabled || isMaleBlocked || isAutoSenior || isTooYoung;
 
         let hint;
-        if (isMaleBlocked) hint = "Not available for male patients";
+        if (isTooYoung) hint = "Senior Citizen is only for patients 60 years old or above";
+        else if (isMaleBlocked) hint = "Not available for male patients";
         else if (isAutoSenior) hint = "Automatically set — patient is 60 years old or above";
 
         return (
@@ -585,6 +613,7 @@ export default function AdminPatients({ readOnly = false }) {
   // Which Service History row is currently in edit mode (its pencil icon was
   // clicked), the draft values being typed, and any save error to show.
   const [editingRecordId, setEditingRecordId] = useState(null);
+  const [notesView, setNotesView] = useState(null); // service record whose notes are open in the read popup
   // Teeth changed on the chart while the Add Service Record popup is open.
   const [addRecordTeeth, setAddRecordTeeth] = useState([]);
   // Patient Type (PWD / Senior / Pregnant) shown in the Add Service Record popup.
@@ -1054,9 +1083,9 @@ export default function AdminPatients({ readOnly = false }) {
       // Update the patient's Patient Type first if it changed since the last visit
       // (e.g. was pregnant before, no longer pregnant now). Rules still apply:
       // 60+ is always Senior Citizen, and a male patient can't be pregnant.
-      const currentAge = selected.age ?? ageFromBirthdate(selected.birthdate);
+      const currentAge = ageAtDate(selected.birthdate, newRecord.record_date) ?? selected.age ?? ageFromBirthdate(selected.birthdate);
       const nextType = { ...addRecordType };
-      if (currentAge !== null && currentAge >= 60) nextType.is_senior_citizen = true;
+      if (currentAge !== null) nextType.is_senior_citizen = currentAge >= 60;
       if (selected.sex === "Male") nextType.is_pregnant = false;
       const visitTypeSnapshot = typeSnapshot(nextType);
       const typeChanges = {};
@@ -1064,6 +1093,7 @@ export default function AdminPatients({ readOnly = false }) {
         if (nextType[field] !== flagOn(selected[field])) typeChanges[field] = nextType[field];
       }
       if (Object.keys(typeChanges).length) {
+        await freezeOtherRecordTypes(null);
         const updatedPatient = await api.patch(`/patients/${selected.id}`, typeChanges);
         setSelected((s) => ({ ...s, ...updatedPatient }));
         setPatients((list) => list.map((p) => (p.id === selected.id ? { ...p, ...updatedPatient } : p)));
@@ -1101,6 +1131,25 @@ export default function AdminPatients({ readOnly = false }) {
     }
   }
 
+  // Old service records that never had their own Patient Type just copy the
+  // patient's CURRENT type. Before the patient's type changes (because a record
+  // was added / edited), save today's type on those old records, so changing one
+  // visit never changes the others.
+  async function freezeOtherRecordTypes(exceptRecordId) {
+    const todo = records.filter(
+      (r) => r.id !== exceptRecordId && !(typeof r.patient_type === "string" && r.patient_type !== "")
+    );
+    if (!todo.length) return;
+    const saved = await Promise.all(
+      todo.map((r) =>
+        api.patch(`/dental-records/${r.id}`, {
+          patient_type: typeSnapshot(visitTypeFlags(null, selected, visitAge(r, selected), selected.sex)),
+        })
+      )
+    );
+    setRecords((list) => list.map((r) => saved.find((u) => u.id === r.id) || r));
+  }
+
   async function saveRecordField(record, field, value) {
     const updated = await api.patch(`/dental-records/${record.id}`, { [field]: value });
     setRecords((list) => list.map((r) => (r.id === record.id ? updated : r)));
@@ -1117,25 +1166,16 @@ export default function AdminPatients({ readOnly = false }) {
       procedure: record.procedure || "",
       dentist: record.dentist || "",
       notes: record.notes || "",
-      type:
-        typeof record.patient_type === "string" && record.patient_type !== ""
-          ? {
-              is_pwd: record.patient_type.includes("PWD"),
-              is_senior_citizen: record.patient_type.includes("Senior"),
-              is_pregnant: record.patient_type.includes("Pregnant"),
-            }
-          : {
-              is_pwd: flagOn(selected?.is_pwd),
-              is_senior_citizen: flagOn(selected?.is_senior_citizen),
-              is_pregnant: flagOn(selected?.is_pregnant),
-            },
+      type: visitTypeFlags(record.patient_type, selected, visitAge(record, selected), selected?.sex),
     });
     setEditingRecordId(record.id);
+    setShowHistoryModal(false); // the edit opens as its own popup
   }
 
   function cancelEditRecord() {
     setEditingRecordId(null);
     setRecordEditError("");
+    setShowHistoryModal(true); // back to Service History
   }
 
   async function saveEditedRecord(record) {
@@ -1153,13 +1193,12 @@ export default function AdminPatients({ readOnly = false }) {
     if (recordDraft.notes !== (record.notes || "")) body.notes = recordDraft.notes;
 
     // Patient Type for this visit (rules still apply: 60+ is Senior, male can't be pregnant).
-    const editAge = selected.age ?? ageFromBirthdate(selected.birthdate);
+    const editAge = ageAtDate(selected.birthdate, recordDraft.record_date) ?? visitAge(record, selected);
     const editedType = { ...recordDraft.type };
-    if (editAge !== null && editAge >= 60) editedType.is_senior_citizen = true;
+    if (editAge !== null) editedType.is_senior_citizen = editAge >= 60;
     if (selected.sex === "Male") editedType.is_pregnant = false;
     const editedSnapshot = typeSnapshot(editedType);
-    const shownSnapshot =
-      typeof record.patient_type === "string" && record.patient_type !== "" ? record.patient_type : typeSnapshot(selected);
+    const shownSnapshot = typeSnapshot(visitTypeFlags(record.patient_type, selected, visitAge(record, selected), selected.sex));
     if (editedSnapshot !== shownSnapshot) body.patient_type = editedSnapshot;
 
     if (!Object.keys(body).length) {
@@ -1181,6 +1220,7 @@ export default function AdminPatients({ readOnly = false }) {
           if (editedType[field] !== flagOn(selected[field])) currentChanges[field] = editedType[field];
         }
         if (Object.keys(currentChanges).length) {
+          await freezeOtherRecordTypes(record.id);
           const updatedPatient = await api.patch(`/patients/${selected.id}`, currentChanges);
           setSelected((s) => ({ ...s, ...updatedPatient }));
           setPatients((list) => list.map((p) => (p.id === selected.id ? { ...p, ...updatedPatient } : p)));
@@ -1189,6 +1229,7 @@ export default function AdminPatients({ readOnly = false }) {
       // The patient list's "latest procedure" / status pill can change too.
       loadPatients();
       setEditingRecordId(null);
+      setShowHistoryModal(true);
     } catch (err) {
       setRecordEditError(err.message || "Could not save the changes.");
     } finally {
@@ -1315,6 +1356,9 @@ export default function AdminPatients({ readOnly = false }) {
     const age = selected.age ?? ageFromBirthdate(selected.birthdate);
     if (age !== null && age >= 60 && !selected.is_senior_citizen) {
       savePatientField(selected, "is_senior_citizen", "true");
+    }
+    if (age !== null && age < 60 && selected.is_senior_citizen) {
+      savePatientField(selected, "is_senior_citizen", "false"); // under 60 can't be a Senior Citizen
     }
     if (selected.sex === "Male" && selected.is_pregnant) {
       savePatientField(selected, "is_pregnant", "false");
@@ -1981,12 +2025,12 @@ export default function AdminPatients({ readOnly = false }) {
                       <td className="px-2 py-2 text-forest-700">{p.age ?? "—"}</td>
                       <td className="px-2 py-2 text-forest-700">{p.sex || "—"}</td>
                       <td className="px-2 py-2">
-                        {Number(p.is_pwd) || Number(p.is_senior_citizen) || Number(p.is_pregnant) ? (
+                        {Number(p.is_pwd) || listSenior(p) || Number(p.is_pregnant) ? (
                           <div className="flex flex-wrap gap-1">
                             {Number(p.is_pwd) ? (
                               <span className="text-[10px] font-semibold rounded-full bg-cream-200 text-forest-800 px-2 py-0.5">PWD</span>
                             ) : null}
-                            {Number(p.is_senior_citizen) ? (
+                            {listSenior(p) ? (
                               <span className="text-[10px] font-semibold rounded-full bg-cream-200 text-forest-800 px-2 py-0.5">Senior</span>
                             ) : null}
                             {Number(p.is_pregnant) ? (
@@ -2077,8 +2121,18 @@ export default function AdminPatients({ readOnly = false }) {
             </div>
 
             {records.length ? (
-              <div className="max-h-[320px] overflow-y-auto overflow-x-auto">
-                <table className="w-full text-sm min-w-[860px]">
+              <div className="max-h-[320px] overflow-y-auto overflow-x-hidden">
+                <table className="w-full text-sm table-fixed">
+                  <colgroup>
+                    <col style={{ width: "11%" }} />
+                    <col style={{ width: "15%" }} />
+                    <col style={{ width: "12%" }} />
+                    <col style={{ width: "13%" }} />
+                    <col style={{ width: "15%" }} />
+                    <col style={{ width: "11%" }} />
+                    <col style={{ width: "15%" }} />
+                    <col style={{ width: "8%" }} />
+                  </colgroup>
                   <thead>
                     <tr className="text-left text-forest-700 uppercase text-xs">
                       <th className="py-2 pr-2">Date</th>
@@ -2092,119 +2146,9 @@ export default function AdminPatients({ readOnly = false }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {records.map((r) =>
-                      editingRecordId === r.id ? (
-                        <tr key={r.id} className="border-t border-cream-200 align-top bg-cream-100">
-                          <td className="py-2 pr-2">
-                            <input
-                              type="date"
-                              value={recordDraft.record_date}
-                              onChange={(e) => setRecordDraft((d) => ({ ...d, record_date: e.target.value }))}
-                              className="w-full min-w-[130px] px-2 py-1.5 rounded border border-forest-500 bg-cream-50 text-sm"
-                            />
-                          </td>
-                          <td className="py-2 pr-2">
-                            <select
-                              value={recordDraft.procedure}
-                              onChange={(e) => setRecordDraft((d) => ({ ...d, procedure: e.target.value }))}
-                              className="w-full min-w-[150px] px-2 py-1.5 rounded border border-forest-500 bg-cream-50 text-sm"
-                            >
-                              {SERVICE_OPTIONS.filter((o) => o.value).map((o) => (
-                                <option key={o.value} value={o.value}>
-                                  {o.label}
-                                </option>
-                              ))}
-                              {recordDraft.procedure && !SERVICE_OPTIONS.some((o) => o.value === recordDraft.procedure) && (
-                                <option value={recordDraft.procedure}>{recordDraft.procedure}</option>
-                              )}
-                            </select>
-                          </td>
-                          <td className="py-2 pr-2 text-forest-500">
-                            <span className="inline-block px-3 py-1 text-xs">—</span>
-                          </td>
-                          <td className="py-2 pr-2">
-                            <select
-                              disabled={!canEdit}
-                              value={(() => {
-                                const age = selected.age ?? ageFromBirthdate(selected.birthdate);
-                                const eff = { ...recordDraft.type };
-                                if (age !== null && age >= 60) eff.is_senior_citizen = true;
-                                if (selected.sex === "Male") eff.is_pregnant = false;
-                                return typeSnapshot(eff);
-                              })()}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                setRecordDraft((d) => ({
-                                  ...d,
-                                  type: {
-                                    is_pwd: v.includes("PWD"),
-                                    is_senior_citizen: v.includes("Senior"),
-                                    is_pregnant: v.includes("Pregnant"),
-                                  },
-                                }));
-                              }}
-                              className="w-full min-w-[150px] px-2 py-1.5 rounded border border-forest-500 bg-cream-50 text-sm"
-                            >
-                              {typeOptionsFor(selected.sex, selected.age ?? ageFromBirthdate(selected.birthdate)).map((o) => (
-                                <option key={o.value} value={o.value}>
-                                  {o.label}
-                                </option>
-                              ))}
-                            </select>
-                          </td>
-                          <td className="py-2 pr-2 min-w-[140px]">
-                            <select
-                              value={recordDraft.dentist}
-                              onChange={(e) => setRecordDraft((d) => ({ ...d, dentist: e.target.value }))}
-                              className="w-full px-2 py-1.5 rounded border border-forest-500 bg-cream-50 text-sm"
-                            >
-                              {dentistOptions(r.dentist).map((o) => (
-                                <option key={o.value} value={o.value}>
-                                  {o.label}
-                                </option>
-                              ))}
-                            </select>
-                          </td>
-                          <td className="py-2 pr-2 min-w-[160px]">
-                            <NotesCell
-                              value={recordDraft.notes}
-                              title={`${r.procedure || "Service record"}${
-                                r.record_date ? ` · ${new Date(r.record_date).toLocaleDateString()}` : ""
-                              }`}
-                              onSave={(v) => setRecordDraft((d) => ({ ...d, notes: v }))}
-                            />
-                          </td>
-                          <td className="py-2 pr-2">
-                            <EditedBy row={r} stacked />
-                          </td>
-                          <td className="py-2 text-right whitespace-nowrap print:hidden">
-                            <div className="inline-flex items-center gap-1">
-                              <button
-                                type="button"
-                                title="Save changes"
-                                aria-label="Save changes"
-                                disabled={savingRecordEdit}
-                                onClick={() => saveEditedRecord(r)}
-                                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-forest-800 hover:bg-cream-200 disabled:opacity-50"
-                              >
-                                <Check size={16} />
-                              </button>
-                              <button
-                                type="button"
-                                title="Cancel"
-                                aria-label="Cancel editing"
-                                disabled={savingRecordEdit}
-                                onClick={cancelEditRecord}
-                                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-forest-600 hover:bg-cream-200 disabled:opacity-50"
-                              >
-                                <XIcon size={16} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ) : (
+                    {records.map((r) => (
                         <tr key={r.id} className="border-t border-cream-200 align-top">
-                          <td className="py-2 pr-2 whitespace-nowrap text-forest-950">
+                          <td className="py-2 pr-2 text-forest-950">
                             {r.record_date ? new Date(r.record_date).toLocaleDateString() : "—"}
                           </td>
                           <td className="py-2 pr-2 text-forest-950">{r.procedure || "—"}</td>
@@ -2218,19 +2162,28 @@ export default function AdminPatients({ readOnly = false }) {
                             </span>
                           </td>
                           <td className="py-2 pr-2">
-                            <PatientTypeBadges source={selected} snapshot={r.patient_type} />
+                            <PatientTypeBadges source={selected} snapshot={r.patient_type} age={visitAge(r, selected)} />
                           </td>
-                          <td className="py-2 pr-2 min-w-[140px] text-forest-950">{r.dentist || "—"}</td>
-                          <td className="py-2 pr-2 min-w-[160px] max-w-[260px] text-forest-950">
-                            <span className="block truncate" title={r.notes || ""}>
-                              {r.notes || "—"}
-                            </span>
+                          <td className="py-2 pr-2 text-forest-950 break-words">{r.dentist || "—"}</td>
+                          <td className="py-2 pr-2 text-forest-950">
+                            {r.notes ? (
+                              <button
+                                type="button"
+                                onClick={() => setNotesView(r)}
+                                title="Click to read the full notes"
+                                className="block w-full truncate text-left text-forest-950 underline decoration-dotted underline-offset-2 hover:text-forest-700"
+                              >
+                                {r.notes}
+                              </button>
+                            ) : (
+                              <span className="text-forest-500">—</span>
+                            )}
                           </td>
                           <td className="py-2 pr-2">
                             <EditedBy row={r} stacked />
                           </td>
-                          <td className="py-2 text-right whitespace-nowrap print:hidden">
-                            <div className="inline-flex items-center gap-1">
+                          <td className="py-2 text-right print:hidden">
+                            <div className="inline-flex items-center justify-end">
                               {canEdit && (
                                 <button
                                   type="button"
@@ -2256,33 +2209,13 @@ export default function AdminPatients({ readOnly = false }) {
                             </div>
                           </td>
                         </tr>
-                      )
-                    )}
+                    ))}
                   </tbody>
                 </table>
               </div>
             ) : (
               <EmptyState>No service history yet for this patient.</EmptyState>
             )}
-            {recordEditError && <p className="text-sm text-red-700">{recordEditError}</p>}
-
-            {/* While a row is being edited (pencil icon), the patient's Oral
-                Health Chart shows up right below it — editable, so what was
-                found at that visit can be corrected in the same place. Only
-                admins/doctors get the pencil, and the server only accepts
-                tooth-chart changes from them too. Each tooth click is saved
-                straight to the patient; the ✓ on the row saves the record. */}
-            {editingRecordId !== null && (
-              <div className="pt-2 border-t border-cream-200 space-y-2">
-                <p className="text-xs text-forest-700">
-                  Oral Health Chart — only the teeth set in this record (and teeth with no record yet) can be changed;
-                  teeth recorded in other visits are locked. Tooth changes are saved right away; use the ✓ on the row
-                  above to save the service record itself.
-                </p>
-                <ToothChart patientId={selected.id} isAdmin recordId={editingRecordId} />
-              </div>
-            )}
-
             <div className="grid gap-3 pt-2 border-t border-cream-200 sm:grid-cols-3">
               <button
                 type="button"
@@ -2324,6 +2257,153 @@ export default function AdminPatients({ readOnly = false }) {
           </div>
         )}
       </Modal>
+
+      {/* ---------- Edit one service record (pencil icon in Service History) ----------
+          Opens as its own popup so nothing else on the screen can be confused with it.
+          Click outside it, press the × or Cancel to close without saving. */}
+      <Modal isOpen={editingRecordId !== null && !!selected} onClose={cancelEditRecord} size="lg">
+        {selected && editingRecordId !== null && (() => {
+          const rec = records.find((x) => x.id === editingRecordId);
+          if (!rec) return null;
+          const editAge = ageAtDate(selected.birthdate, recordDraft.record_date) ?? visitAge(rec, selected);
+          return (
+            <div className="space-y-3">
+              <div>
+                <h3 className="font-display text-lg font-bold text-forest-950">Edit Service Record</h3>
+                <p className="text-sm text-forest-500 mt-0.5">
+                  {selected.name} · PT-{String(selected.id).padStart(4, "0")}
+                </p>
+              </div>
+
+              <div className="grid gap-x-3 gap-y-2 sm:grid-cols-2">
+                <label className="block text-sm font-semibold text-forest-950">
+                  Date
+                  <input
+                    type="date"
+                    value={recordDraft.record_date}
+                    onChange={(e) => setRecordDraft((d) => ({ ...d, record_date: e.target.value }))}
+                    className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg border border-cream-200 bg-cream-50 text-sm font-normal"
+                  />
+                </label>
+                <label className="block text-sm font-semibold text-forest-950">
+                  Procedure
+                  <select
+                    value={recordDraft.procedure}
+                    onChange={(e) => setRecordDraft((d) => ({ ...d, procedure: e.target.value }))}
+                    className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg border border-cream-200 bg-cream-50 text-sm font-normal"
+                  >
+                    {SERVICE_OPTIONS.filter((o) => o.value).map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                    {recordDraft.procedure && !SERVICE_OPTIONS.some((o) => o.value === recordDraft.procedure) && (
+                      <option value={recordDraft.procedure}>{recordDraft.procedure}</option>
+                    )}
+                  </select>
+                </label>
+                <label className="block text-sm font-semibold text-forest-950">
+                  Dentist
+                  <select
+                    value={recordDraft.dentist}
+                    onChange={(e) => setRecordDraft((d) => ({ ...d, dentist: e.target.value }))}
+                    className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg border border-cream-200 bg-cream-50 text-sm font-normal"
+                  >
+                    {dentistOptions(rec.dentist).map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="text-sm font-semibold text-forest-950">
+                  Patient Type (this visit only)
+                  <div className="mt-1">
+                    <PatientTypeButtons
+                      values={recordDraft.type}
+                      sex={selected.sex}
+                      age={editAge}
+                      disabled={!canEdit}
+                      onToggle={(field) => setRecordDraft((d) => ({ ...d, type: { ...d.type, [field]: !d.type[field] } }))}
+                      compact
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <label className="block text-sm font-semibold text-forest-950">
+                Notes
+                <textarea
+                  rows={2}
+                  value={recordDraft.notes}
+                  onChange={(e) => setRecordDraft((d) => ({ ...d, notes: e.target.value }))}
+                  className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg border border-cream-200 bg-cream-50 text-sm font-normal"
+                />
+              </label>
+
+              <div className="pt-2 border-t border-cream-200 space-y-1">
+                <p className="text-[11px] text-forest-700">
+                  Only the teeth set in this record (and teeth with no record yet) can be changed. Tooth changes save
+                  right away; press Save changes for the rest.
+                </p>
+                <ToothChart patientId={selected.id} isAdmin recordId={editingRecordId} />
+              </div>
+
+              {recordEditError && <p className="text-sm text-red-700">{recordEditError}</p>}
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-cream-200">
+                <button
+                  type="button"
+                  onClick={cancelEditRecord}
+                  disabled={savingRecordEdit}
+                  className="rounded-full border border-forest-900 px-4 py-1.5 text-sm font-semibold text-forest-900 hover:bg-cream-200 disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => saveEditedRecord(rec)}
+                  disabled={savingRecordEdit}
+                  className="rounded-full bg-forest-900 px-5 py-1.5 text-sm font-semibold text-cream-50 hover:bg-forest-800 disabled:opacity-60"
+                >
+                  {savingRecordEdit ? "Saving…" : "Save changes"}
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
+
+      {/* Notes of one service record, opened by clicking its Notes in Service History.
+          Light dim only, so the history stays visible behind it. Click outside or × to close. */}
+      {notesView && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/25 px-4"
+          onClick={() => setNotesView(null)}
+        >
+          <div
+            className="relative w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => setNotesView(null)}
+              aria-label="Close notes"
+              className="absolute top-3 right-4 text-xl font-bold text-ink-900 hover:text-forest-800"
+            >
+              ×
+            </button>
+            <p className="pr-6 text-xs font-semibold uppercase tracking-wide text-forest-500">Notes</p>
+            <p className="mt-0.5 pr-6 text-sm font-semibold text-forest-950">
+              {notesView.procedure || "Service record"}
+              {notesView.record_date ? ` · ${new Date(notesView.record_date).toLocaleDateString()}` : ""}
+            </p>
+            <p className="mt-3 max-h-64 overflow-y-auto whitespace-pre-wrap break-words text-sm text-forest-800">
+              {notesView.notes}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* ---------- Add Service Record popup ----------
           Its own popup (like the Treatment Record and Patient Summary):
