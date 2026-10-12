@@ -148,12 +148,19 @@ Once you're happy with it locally, you need to host the frontend and backend som
    - Add an environment variable `JWT_SECRET` with a long random string (don't reuse the placeholder from `.env`).
    - Note the public URL it gives you, e.g. `https://city-dental-api.onrender.com`.
 
-3. **Deploy the frontend** to [Vercel](https://vercel.com) or [Netlify](https://netlify.com), both built for this.
-   - Connect the same GitHub repo, set the root directory to `frontend`.
-   - Add an environment variable `VITE_API_URL` set to your backend's public URL + `/api` (e.g. `https://city-dental-api.onrender.com/api`).
-   - Deploy — you'll get a public link like `https://city-dental-section.vercel.app`.
+3. **Deploy the frontend** with GitHub Pages.
+   - In the repository, open **Settings → Pages → Build and deployment** and choose **GitHub Actions** as the source.
+   - The included `.github/workflows/deploy-pages.yml` builds the frontend whenever changes are pushed to `main`.
+   - After the workflow succeeds, the public app URL is `https://cabarrubiasjulian3-hash.github.io/city-dental-section/`.
+   - GitHub Pages serves the frontend only. The API and database continue to run on Render.
 
-4. **Note on SQLite in production:** SQLite writes to a local file, which works fine on Render/Railway as long as you attach a persistent disk (both offer this on paid tiers; free tiers may reset the file on redeploy). For a database that survives redeploys without a persistent disk, swap in a hosted Postgres database later (e.g. via [Supabase](https://supabase.com) or [Neon](https://neon.tech)) — the `better-sqlite3` calls in `backend/routes/` would need to be swapped for a Postgres client like `pg`, but the route logic and endpoints stay the same.
+4. **Create or reset the production admin account** without a Render Shell.
+   - In the Render backend service, open **Environment** and add `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD`. Use your admin email and a new, unique password of at least 12 characters.
+   - Save the variables and wait for Render to restart. The backend creates the admin account on startup if that email is not already present.
+   - To reset an existing account created this way, temporarily set `BOOTSTRAP_ADMIN_RESET_PASSWORD=true`, save and wait for restart, then remove that variable and save again.
+   - Never put the password in GitHub source or a frontend variable.
+
+5. **Important SQLite limitation:** Render Free does not provide persistent storage for this SQLite database. Accounts and patient data can disappear on restart or redeploy. Do not use this setup for real patient data unless the database is moved to persistent storage or a hosted PostgreSQL service.
 
 ---
 

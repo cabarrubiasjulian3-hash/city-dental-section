@@ -1,6 +1,8 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import bcrypt from "bcryptjs";
+import db from "./db.js";
 
 import authRoutes from "./routes/auth.js";
 import patientRoutes from "./routes/patients.js";
@@ -22,6 +24,45 @@ import { autoCompletePastSchedules } from "./lib/scheduleStatus.js";
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+function bootstrapAdmin() {
+  const email = process.env.BOOTSTRAP_ADMIN_EMAIL?.trim().toLowerCase();
+  const password = process.env.BOOTSTRAP_ADMIN_PASSWORD;
+  const resetPassword = process.env.BOOTSTRAP_ADMIN_RESET_PASSWORD === "true";
+
+  if (!email && !password) return;
+  if (!email || !password) {
+    throw new Error("Set both BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD.");
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error("BOOTSTRAP_ADMIN_EMAIL must be a valid email address.");
+  }
+  if (password.length < 12) {
+    throw new Error("BOOTSTRAP_ADMIN_PASSWORD must be at least 12 characters.");
+  }
+
+  const existing = db.prepare("SELECT id, role FROM users WHERE LOWER(email) = ?").get(email);
+  const passwordHash = bcrypt.hashSync(password, 12);
+
+  if (existing) {
+    if (existing.role !== "admin") {
+      throw new Error("The bootstrap email already belongs to a non-admin account.");
+    }
+    if (resetPassword) {
+      db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(passwordHash, existing.id);
+      console.log("Reset the bootstrap admin password.");
+    }
+    return;
+  }
+
+  db.prepare(
+    "INSERT INTO users (role, name, email, password_hash) VALUES ('admin', ?, ?, ?)"
+  ).run("City Dental Admin", email, passwordHash);
+  console.log("Created the bootstrap admin account.");
+}
+
+bootstrapAdmin();
+
 // Logs what doctors change (patient records, barangay schedule) for the notification bell.
 app.use("/api", auditDoctorChanges);
 

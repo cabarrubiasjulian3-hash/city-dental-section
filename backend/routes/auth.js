@@ -265,7 +265,8 @@ router.post("/register", (req, res) => {
 // Login (patient or admin, based on stored role)
 router.post("/login", (req, res) => {
   const { email, password } = req.body;
-  const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
+  const normalizedEmail = String(email || "").trim().toLowerCase();
+  const user = db.prepare("SELECT * FROM users WHERE LOWER(email) = ?").get(normalizedEmail);
   if (!user || isUnclaimedImportedRow(user) || !bcrypt.compareSync(password, user.password_hash)) {
     return res.status(401).json({ error: "Invalid email or password." });
   }
