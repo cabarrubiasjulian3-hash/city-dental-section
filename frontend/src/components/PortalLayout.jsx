@@ -199,7 +199,7 @@ export default function PortalLayout({ title, subtitle, navItems }) {
             : "-translate-x-full pointer-events-none md:translate-x-0 md:pointer-events-auto md:w-0 md:border-r-0"
         }`}
       >
-        <div className="w-64 h-full flex flex-col overflow-y-auto">
+        <div className="portal-aside-inner w-64 h-full flex flex-col overflow-y-auto">
           <div className="flex items-center gap-3 px-6 py-6">
             <div className="w-9 h-9 rounded-full bg-brand-900 flex items-center justify-center overflow-hidden shrink-0">
               <img src="/logo.png" alt="City Dental Section logo" className="w-full h-full object-cover" />
@@ -246,7 +246,7 @@ export default function PortalLayout({ title, subtitle, navItems }) {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0 print:block print:w-full">
-        <header className="flex items-center justify-between gap-3 px-4 py-3 sm:px-6 md:px-8 md:py-5 bg-[#26401e] print:hidden">
+        <header className="portal-header flex items-center justify-between gap-3 px-4 py-3 sm:px-6 md:px-8 md:py-5 bg-[#26401e] print:hidden">
           <div className="flex min-w-0 items-center gap-3">
             <button
               onClick={() => setSidebarOpen((v) => !v)}
@@ -387,6 +387,17 @@ export default function PortalLayout({ title, subtitle, navItems }) {
             .portal-main table { display: block; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
             .portal-main img, .portal-main canvas, .portal-main svg { max-width: 100%; }
             .portal-main h2 { overflow-wrap: anywhere; }
+            .portal-main table th, .portal-main table td { padding-left: 0.4rem; padding-right: 0.4rem; }
+          }
+          /* Phones: shrink everything (text, icons, buttons, spacing) together so
+             pages fit without crowding. 'zoom' scales px-sized icons too. */
+          @media (max-width: 639px) {
+            .portal-main { zoom: 0.84; }
+            .portal-header { zoom: 0.88; }
+            .portal-aside-inner { zoom: 0.9; }
+          }
+          @media (max-width: 380px) {
+            .portal-main { zoom: 0.78; }
           }
         `}</style>
         <main className="portal-main flex-1 min-w-0 p-4 sm:p-6 md:p-8 overflow-y-auto overflow-x-hidden print:overflow-visible print:h-auto print:p-0">
