@@ -7,6 +7,7 @@ import { getDoctorAccessiblePatientIds } from "../lib/doctorMatch.js";
 import { archiveServiceRecord } from "../lib/archive.js";
 import { stampEdit } from "../lib/editStamp.js";
 import { normalizePatientType } from "../lib/patientType.js";
+import { normalizeTreatmentRecord } from "../lib/treatmentRecord.js";
 import { calcAge } from "../lib/age.js";
 
 // Falls back to a snapshot of the PATIENT's current PWD / Senior Citizen /
@@ -51,7 +52,7 @@ router.get("/", (req, res) => {
 // Report (by the patient's barangay, and by the attending dentist) — see
 // lib/reportSync.js.
 router.post("/", requireRole("admin", "doctor"), (req, res) => {
-  const { patient_id, record_date, procedure, dentist, notes, teeth, patient_type } = req.body;
+  const { patient_id, record_date, procedure, dentist, notes, teeth, patient_type, treatment_record } = req.body;
   if (req.user.role === "doctor" && !getDoctorAccessiblePatientIds(db, req.user).has(Number(patient_id))) {
     return res.status(403).json({ error: "You can only add records for your own patients." });
   }
@@ -75,8 +76,8 @@ router.post("/", requireRole("admin", "doctor"), (req, res) => {
   const info = db
     .prepare(
       `INSERT INTO dental_records
-         (patient_id, record_date, procedure, dentist, notes, patient_type, report_month, report_field, report_barangay, report_dentist)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (patient_id, record_date, procedure, dentist, notes, patient_type, treatment_record, report_month, report_field, report_barangay, report_dentist)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       patient_id,
@@ -85,6 +86,7 @@ router.post("/", requireRole("admin", "doctor"), (req, res) => {
       dentist || null,
       notes || null,
       typeSnapshot,
+      normalizeTreatmentRecord(treatment_record),
       snapshot.report_month,
       snapshot.report_field,
       snapshot.report_barangay,
@@ -109,7 +111,7 @@ router.post("/", requireRole("admin", "doctor"), (req, res) => {
 // re-applied so counts stay accurate.
 router.patch("/:id", requireRole("admin", "doctor"), (req, res) => {
   const id = Number(req.params.id);
-  const { record_date, procedure, dentist, notes, patient_type } = req.body;
+  const { record_date, procedure, dentist, notes, patient_type, treatment_record } = req.body;
   const existing = db.prepare("SELECT * FROM dental_records WHERE id = ?").get(id);
   if (!existing) return res.status(404).json({ error: "Record not found." });
   if (req.user.role === "doctor" && !getDoctorAccessiblePatientIds(db, req.user).has(existing.patient_id)) {
@@ -154,6 +156,7 @@ router.patch("/:id", requireRole("admin", "doctor"), (req, res) => {
        dentist = COALESCE(?, dentist),
        notes = COALESCE(?, notes),
        patient_type = COALESCE(?, patient_type),
+       treatment_record = COALESCE(?, treatment_record),
        report_month = ?, report_field = ?, report_barangay = ?, report_dentist = ?
      WHERE id = ?`
   ).run(
@@ -162,6 +165,7 @@ router.patch("/:id", requireRole("admin", "doctor"), (req, res) => {
     dentist ?? null,
     notes ?? null,
     newType ?? null,
+    normalizeTreatmentRecord(treatment_record),
     snapshot.report_month,
     snapshot.report_field,
     snapshot.report_barangay,

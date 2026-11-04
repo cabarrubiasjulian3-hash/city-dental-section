@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { ArrowRight, Bot, MessageCircle, Send, Sparkles, Stethoscope } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { api } from "../../lib/api";
 import { getBotReply, QUICK_REPLIES, WELCOME_MESSAGE } from "../../lib/chatbot";
@@ -236,22 +237,60 @@ export default function PatientMessages() {
 
   return (
     <div className="space-y-6">
-      <h2 className="font-display text-2xl font-bold text-forest-950">Messages</h2>
+      <style>{`
+        @keyframes ms-rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+        @keyframes ms-bubble { from { opacity: 0; transform: translateY(10px) scale(0.96); } to { opacity: 1; transform: none; } }
+        @keyframes ms-dot { 0%, 80%, 100% { transform: translateY(0); opacity: 0.45; } 40% { transform: translateY(-5px); opacity: 1; } }
+        @keyframes ms-online { 0% { box-shadow: 0 0 0 0 rgb(134 239 172 / 0.7); } 70% { box-shadow: 0 0 0 6px rgb(134 239 172 / 0); } 100% { box-shadow: 0 0 0 0 rgb(134 239 172 / 0); } }
+        @keyframes ms-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+        .ms-rise { animation: ms-rise 0.5s cubic-bezier(.2,.8,.2,1) both; }
+        .ms-bubble { animation: ms-bubble 0.35s cubic-bezier(.2,.8,.2,1) both; }
+        .ms-dot { animation: ms-dot 1.1s ease-in-out infinite; }
+        .ms-online { animation: ms-online 2s ease-out infinite; }
+        .ms-float { animation: ms-float 6s ease-in-out infinite; }
+        .ms-chip { transition: transform 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease; }
+        .ms-chip:not(:disabled):hover { transform: translateY(-2px); box-shadow: 0 6px 14px rgb(37 53 34 / 0.12); }
+        .ms-chip:not(:disabled):active { transform: scale(0.97); }
+        .ms-send { transition: transform 0.15s ease, opacity 0.15s ease, background-color 0.15s ease; }
+        .ms-send:not(:disabled):hover { transform: scale(1.08) rotate(-8deg); }
+        .ms-send:not(:disabled):active { transform: scale(0.94); }
+        .ms-act { transition: transform 0.15s ease, opacity 0.15s ease; }
+        .ms-act:hover { transform: translateX(2px); opacity: 0.92; }
+        @media (prefers-reduced-motion: reduce) { .ms-rise, .ms-bubble, .ms-dot, .ms-online, .ms-float { animation: none !important; } .ms-chip, .ms-send, .ms-act { transition: none !important; } }
+        .cds-reduce-motion .ms-rise, .cds-reduce-motion .ms-bubble, .cds-reduce-motion .ms-dot, .cds-reduce-motion .ms-online, .cds-reduce-motion .ms-float { animation: none !important; }
+        .cds-reduce-motion .ms-chip, .cds-reduce-motion .ms-send, .cds-reduce-motion .ms-act { transition: none !important; }
+      `}</style>
 
-      <div className="border border-cream-200 rounded-2xl flex flex-col h-[620px] overflow-hidden bg-cream-50 shadow-[0_2px_12px_rgba(37,53,34,0.12)]">
+      <div>
+        <h2 className="font-display text-2xl font-bold text-forest-950">Messages</h2>
+        <p className="mt-1 text-sm text-forest-700">
+          Ask the City Dental Section anything. The automated assistant answers right away, and our doctors reply here too.
+        </p>
+      </div>
+
+      <div className="ms-rise flex h-[620px] flex-col overflow-hidden rounded-3xl border border-cream-200 bg-cream-50 shadow-[0_6px_24px_rgba(37,53,34,0.14)]">
         {/* Header */}
-        <div className="flex items-center gap-3 px-5 py-3 border-b border-cream-200 bg-cream-100">
-          <div className="w-10 h-10 rounded-full bg-brand-900 overflow-hidden shrink-0">
-            <img src="/logo.png" alt="" className="w-full h-full object-cover" />
+        <div className="relative flex items-center gap-3 overflow-hidden bg-[#26401e] px-5 py-3.5 text-[#ebebc2]">
+          <span className="ms-float pointer-events-none absolute -right-8 -top-10 h-32 w-32 rounded-full bg-leaf-300/10" />
+          <div className="relative">
+            <div className="h-11 w-11 shrink-0 overflow-hidden rounded-full bg-brand-900 ring-2 ring-leaf-300/60">
+              <img src="/logo.png" alt="" className="h-full w-full object-cover" />
+            </div>
+            <span className="ms-online absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-[#26401e] bg-green-300" />
           </div>
-          <div className="flex-1 min-w-0">
-            <p className="font-semibold text-sm text-forest-950 leading-tight">City Dental Section</p>
-            <p className="text-xs text-forest-600">Automated assistant · Doctors reply here</p>
+          <div className="relative min-w-0 flex-1">
+            <p className="text-sm font-semibold leading-tight">City Dental Section</p>
+            <p className="flex items-center gap-1.5 text-xs text-[#ebebc2]/75">
+              <Bot size={12} /> Automated assistant
+              <span className="opacity-50">·</span>
+              <Stethoscope size={12} /> Doctors reply here
+            </p>
           </div>
+          <MessageCircle size={20} className="relative hidden text-leaf-300 sm:block" />
         </div>
 
         {/* Conversation */}
-        <div ref={scrollRef} aria-live="polite" className="flex-1 overflow-y-auto p-5 space-y-3">
+        <div ref={scrollRef} aria-live="polite" className="flex-1 space-y-3 overflow-y-auto bg-gradient-to-b from-cream-100 to-cream-50 p-5">
           <Bubble variant="bot" text={WELCOME_MESSAGE} label="Automated assistant" />
 
           {!loaded && <p className="text-center text-xs text-forest-500">Loading messages…</p>}
@@ -288,12 +327,13 @@ export default function PatientMessages() {
           )}
 
           {typing && (
-            <div className="flex justify-start">
-              <div className="bg-cream-200 rounded-2xl px-4 py-3 flex items-center gap-1" aria-label="Nagta-type…">
+            <div className="ms-bubble flex items-end justify-start gap-2">
+              <Avatar variant="bot" />
+              <div className="flex items-center gap-1 rounded-2xl rounded-bl-md bg-cream-200 px-4 py-3.5" aria-label="Nagta-type…">
                 {[0, 150, 300].map((delay) => (
                   <span
                     key={delay}
-                    className="w-1.5 h-1.5 rounded-full bg-forest-600 animate-bounce"
+                    className="ms-dot h-1.5 w-1.5 rounded-full bg-forest-600"
                     style={{ animationDelay: `${delay}ms` }}
                   />
                 ))}
@@ -305,8 +345,8 @@ export default function PatientMessages() {
         {/* Quick replies + input */}
         <div className="border-t border-cream-200 bg-cream-50">
           <div className="px-4 pt-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-forest-500 text-center mb-2">
-              Tap to send
+            <p className="mb-2 flex items-center justify-center gap-1.5 text-center text-[11px] font-semibold uppercase tracking-wide text-forest-500">
+              <Sparkles size={12} /> Tap to send
             </p>
             <div className="flex flex-wrap justify-center gap-2">
               {QUICK_REPLIES.map((q) => (
@@ -314,7 +354,7 @@ export default function PatientMessages() {
                   key={q}
                   onClick={() => send(q)}
                   disabled={busy}
-                  className="rounded-full border border-cream-200 bg-cream-100 px-3.5 py-1.5 text-xs font-semibold text-forest-900 hover:bg-cream-200 transition-colors disabled:opacity-50"
+                  className="ms-chip rounded-full border border-cream-200 bg-cream-100 px-3.5 py-1.5 text-xs font-semibold text-forest-900 hover:border-forest-700 hover:bg-cream-200 disabled:opacity-50"
                 >
                   {q}
                 </button>
@@ -332,15 +372,16 @@ export default function PatientMessages() {
               onChange={(e) => setText(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Mag-type ng mensahe…"
-              className="flex-1 resize-none rounded-2xl border border-cream-200 bg-cream-100 px-4 py-2 text-sm outline-none focus:border-forest-700"
+              className="flex-1 resize-none rounded-2xl border border-cream-200 bg-cream-100 px-4 py-2.5 text-sm outline-none transition-shadow focus:border-forest-700 focus:shadow-[0_0_0_3px_rgba(47,111,79,0.15)]"
             />
             <button
               type="submit"
               disabled={!text.trim() || busy}
-              className="w-10 h-10 shrink-0 rounded-full bg-brand-900 text-brand-50 flex items-center justify-center disabled:opacity-50"
+              className="ms-send flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-brand-900 text-brand-50 disabled:opacity-50"
               title="Send"
+              aria-label="Send"
             >
-              ➤
+              <Send size={18} />
             </button>
           </form>
         </div>
@@ -349,29 +390,43 @@ export default function PatientMessages() {
   );
 }
 
+// Small round avatar next to a message: the bot, or a doctor.
+function Avatar({ variant }) {
+  return (
+    <span
+      className={`mb-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${
+        variant === "staff" ? "bg-leaf-300 text-brand-900" : "bg-cream-200 text-forest-800"
+      }`}
+    >
+      {variant === "staff" ? <Stethoscope size={14} /> : <Bot size={14} />}
+    </span>
+  );
+}
+
 // variant: "me" (the patient) · "bot" (automated reply) · "staff" (a doctor)
 function Bubble({ variant, label, text, time, link, onLink, prefill, onPrefill }) {
   const mine = variant === "me";
   const styles = {
-    me: "bg-brand-900 text-brand-50",
-    bot: "bg-cream-200 text-forest-950",
-    staff: "bg-cream-50 border-2 border-leaf-300 text-forest-950",
+    me: "bg-brand-900 text-brand-50 rounded-br-md shadow-sm",
+    bot: "bg-cream-200 text-forest-950 rounded-bl-md",
+    staff: "bg-cream-50 border-2 border-leaf-300 text-forest-950 rounded-bl-md shadow-sm",
   };
   return (
-    <div className={`flex ${mine ? "justify-end" : "justify-start"}`}>
-      <div className={`max-w-[85%] sm:max-w-md flex flex-col ${mine ? "items-end" : "items-start"}`}>
+    <div className={`ms-bubble flex items-end gap-2 ${mine ? "justify-end" : "justify-start"}`}>
+      {!mine && <Avatar variant={variant} />}
+      <div className={`flex max-w-[85%] flex-col sm:max-w-md ${mine ? "items-end" : "items-start"}`}>
         {label && (
-          <span className={`text-[11px] font-semibold mb-1 px-1 ${variant === "staff" ? "text-forest-800" : "text-forest-500"}`}>
+          <span className={`mb-1 px-1 text-[11px] font-semibold ${variant === "staff" ? "text-forest-800" : "text-forest-500"}`}>
             {label}
           </span>
         )}
-        <div className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-line break-words ${styles[variant]}`}>
+        <div className={`whitespace-pre-line break-words rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${styles[variant]}`}>
           {text}
         </div>
         {prefill && (
           <button
             onClick={() => onPrefill(prefill)}
-            className="mt-2 rounded-full bg-brand-900 text-brand-50 text-xs font-semibold px-3.5 py-1.5 hover:opacity-90 transition-opacity"
+            className="ms-act mt-2 inline-flex items-center gap-1.5 rounded-full bg-brand-900 px-3.5 py-1.5 text-xs font-semibold text-brand-50"
           >
             I-fill up ang form dito ↓
           </button>
@@ -379,12 +434,12 @@ function Bubble({ variant, label, text, time, link, onLink, prefill, onPrefill }
         {link && (
           <button
             onClick={() => onLink(link.to)}
-            className="mt-2 rounded-full bg-brand-900 text-brand-50 text-xs font-semibold px-3.5 py-1.5 hover:opacity-90 transition-opacity"
+            className="ms-act mt-2 inline-flex items-center gap-1.5 rounded-full bg-brand-900 px-3.5 py-1.5 text-xs font-semibold text-brand-50"
           >
-            {link.label} →
+            {link.label} <ArrowRight size={13} />
           </button>
         )}
-        {time && <span className="text-[10px] text-forest-500 mt-1 px-1">{time}</span>}
+        {time && <span className="mt-1 px-1 text-[10px] text-forest-500">{time}</span>}
       </div>
     </div>
   );

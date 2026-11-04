@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Pencil, Archive as ArchiveIcon, Check, X as XIcon } from "lucide-react";
+import { Pencil, Archive as ArchiveIcon, Check, X as XIcon, ClipboardList, Users, CheckCircle2, XCircle, Clock } from "lucide-react";
 import { api } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
 import { Card, EmptyState } from "../../components/ui";
+import { AnimatedNumber } from "../../components/Charts";
 import Modal from "../../components/Modal";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import ToothChart from "../../components/ToothChart";
 import EditableCell, { SEX_OPTIONS } from "../../components/EditableCell";
 import NotesCell from "../../components/NotesCell";
 import EditedBy from "../../components/EditedBy";
-import { SERVICE_OPTIONS, visitsRequiredFor, computeRecordStatuses } from "../../lib/services";
+import { SERVICE_OPTIONS, visitsRequiredFor, computeRecordStatuses, statusForLatestService, openReturnWindow } from "../../lib/services";
 import { REPORT_FIELD_LABELS } from "../../lib/reportFieldLabels";
 import { TAYABAS_BARANGAYS } from "../../lib/barangays";
 import { composeFullName } from "../../lib/name";
@@ -87,6 +88,14 @@ const PATIENT_FLAG_FIELDS = [
   { field: "is_senior_citizen", label: "Senior Citizen" },
   { field: "is_pregnant", label: "Pregnant" },
 ];
+
+// A record added in the last 3 days gets a small pulsing "New" tag in the list.
+const NEW_RECORD_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
+function isRecentlyAdded(p) {
+  if (!p?.created_at) return false;
+  const t = new Date(String(p.created_at).replace(" ", "T") + (String(p.created_at).includes("Z") ? "" : "Z")).getTime();
+  return Number.isFinite(t) && Date.now() - t >= 0 && Date.now() - t < NEW_RECORD_WINDOW_MS;
+}
 
 // Age in years from a YYYY-MM-DD birthdate (null if it can't be read).
 function ageFromBirthdate(birthdate) {
@@ -243,6 +252,332 @@ const MEDICAL_HISTORY_BOOL_FIELDS = [
   { field: "has_thyroid_disorders", label: "Thyroid Disorders" },
 ];
 
+// ---------- Treatment Record of ONE service record ----------
+// Every service record keeps its own copy of the Individual Patient Treatment Record
+// (membership, medical history, hospitalization, diet, conforme), saved as JSON in
+// the record's `treatment_record`. A new record starts from the previous visit's copy,
+// so it can be updated or left as it is.
+const TREATMENT_YES_NO_FIELDS = [
+  "is_nhts_pr",
+  "is_4ps",
+  "is_indigenous_people",
+  "has_hypertension_cva",
+  "has_diabetes_mellitus",
+  "has_blood_disorders",
+  "has_cardio_heart_disease",
+  "has_thyroid_disorders",
+  "has_tattoo",
+];
+// Gender choices for the Treatment Record (kept separate from Sex, which the reports use).
+const GENDER_OPTIONS = [
+  "Man",
+  "Woman",
+  "Transgender man",
+  "Transgender woman",
+  "Non-binary",
+  "Genderqueer",
+  "Genderfluid",
+  "Agender",
+  "Bigender",
+  "Androgyne",
+  "Pangender (Omnigender)",
+  "Intergender",
+  "Gender-nonconforming",
+  "Two-Spirit",
+  "Questioning",
+  "I use a different term",
+  "Prefer not to say",
+];
+const GENDER_SELECT_OPTIONS = [{ value: "", label: "—" }, ...GENDER_OPTIONS.map((g) => ({ value: g, label: g }))];
+// What to show for a patient's gender (the typed term when "I use a different term" was chosen).
+const genderLabel = (p) => (p?.gender === "I use a different term" ? p?.gender_other || "Different term" : p?.gender || "—");
+const TREATMENT_INFO_FIELDS = [
+  "surname", "first_name", "middle_name", "birthdate", "sex", "gender", "gender_other", "place_of_birth", "cellphone_no",
+  "occupation", "barangay", "address", "parent_guardian", "blood_pressure", "pulse_rate", "temperature",
+];
+const TREATMENT_TEXT_FIELDS = [
+  // Patient information + vital signs of THIS visit (also kept per service record)
+  "surname",
+  "first_name",
+  "middle_name",
+  "birthdate",
+  "sex",
+  "gender",
+  "gender_other",
+  "place_of_birth",
+  "cellphone_no",
+  "occupation",
+  "barangay",
+  "address",
+  "parent_guardian",
+  "blood_pressure",
+  "pulse_rate",
+  "temperature",
+  "philhealth_no",
+  "sss_no",
+  "gsis_no",
+  "allergies",
+  "hepatitis",
+  "malignancy",
+  "hosp_medical",
+  "hosp_surgical",
+  "hosp_blood_transfusion",
+  "hosp_others",
+  "diet_sugar_beverages",
+  "diet_alcohol",
+  "diet_tobacco",
+  "diet_betel_nut",
+  "conforme_name",
+];
+
+// What the patient has on file (used for records that were saved before each visit had its own copy).
+function treatmentFromPatient(p) {
+  const t = {};
+  for (const f of TREATMENT_YES_NO_FIELDS) t[f] = flagOn(p?.[f]);
+  for (const f of TREATMENT_TEXT_FIELDS) t[f] = p?.[f] == null ? "" : String(p[f]);
+  for (const f of ["blood_pressure", "pulse_rate", "temperature"]) t[f] = p?.vitals?.[f] == null ? "" : String(p.vitals[f]);
+  if (t.birthdate) t.birthdate = String(t.birthdate).slice(0, 10);
+  return t;
+}
+
+function parseTreatment(raw) {
+  if (!raw) return null;
+  if (typeof raw === "object") return raw;
+  try {
+    const obj = JSON.parse(raw);
+    return obj && typeof obj === "object" ? obj : null;
+  } catch {
+    return null;
+  }
+}
+
+// The Treatment Record to show for one service record: its own, else the patient's.
+function treatmentForRecord(record, patient) {
+  const own = parseTreatment(record?.treatment_record);
+  if (!own) return treatmentFromPatient(patient);
+  // Copies saved before patient information / vital signs were part of the record lack those
+  // keys: fill only those from the patient so the popup isn't empty.
+  const fromPatient = treatmentFromPatient(patient);
+  const merged = { ...treatmentFromPatient(null), ...own };
+  for (const f of TREATMENT_INFO_FIELDS) if (own[f] === undefined) merged[f] = fromPatient[f];
+  return merged;
+}
+
+const sameTreatment = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+// The Individual Patient Treatment Record of ONE visit, laid out like the paper form:
+// patient information, Patient Type, membership + vital signs, medical history,
+// hospitalization, dietary / social history and conforme. Used in the Add / Edit / View popups.
+// Everything here is saved with the service record only — it never rewrites the patient
+// or the other visits.
+function TreatmentRecordForm({ value, onChange, readOnly = false, typeFlags, onToggleType, visitDate, title }) {
+  const set = (field, v) => onChange({ ...value, [field]: v });
+  const age = ageAtDate(value.birthdate, visitDate) ?? ageFromBirthdate(value.birthdate);
+  const tile = "bg-cream-100 rounded-xl px-3 py-1.5 w-full";
+  const tileLabel = "text-[10px] uppercase tracking-wide text-forest-700";
+  const tileInput =
+    "mt-0.5 w-full bg-transparent text-sm font-semibold text-forest-950 outline-none placeholder:font-normal placeholder:text-forest-500 disabled:opacity-100";
+  const tileField = (field, labelText, placeholder, type = "text", extra = "") => (
+    <div className={`${tile} ${extra}`} key={field}>
+      <p className={tileLabel}>{labelText}</p>
+      <input
+        type={type}
+        disabled={readOnly}
+        value={value[field] || ""}
+        placeholder={readOnly ? "—" : placeholder}
+        onChange={(e) => set(field, e.target.value)}
+        className={tileInput}
+      />
+    </div>
+  );
+  const row = "flex items-center justify-between gap-3 py-2 border-b border-dashed border-cream-200 last:border-0";
+  const label = "text-sm text-forest-600 shrink-0";
+  const input =
+    "w-40 rounded-lg border border-cream-200 bg-cream-50 px-2 py-1 text-sm text-forest-950 disabled:opacity-80 disabled:bg-transparent disabled:border-transparent";
+  const yesNo = (field, text) => (
+    <div className={row} key={field}>
+      <span className={label}>{text}</span>
+      <select
+        disabled={readOnly}
+        value={value[field] ? "true" : "false"}
+        onChange={(e) => set(field, e.target.value === "true")}
+        className={input}
+      >
+        <option value="false">No</option>
+        <option value="true">Yes</option>
+      </select>
+    </div>
+  );
+  const text = (field, labelText, placeholder = "None") => (
+    <div className={row} key={field}>
+      <span className={label}>{labelText}</span>
+      <input
+        disabled={readOnly}
+        value={value[field] || ""}
+        placeholder={readOnly ? "—" : placeholder}
+        onChange={(e) => set(field, e.target.value)}
+        className={input}
+      />
+    </div>
+  );
+  const box = (heading, children, extra = "") => (
+    <div className={`bg-white border border-cream-200 rounded-2xl p-5 ${extra}`}>
+      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-forest-700">{heading}</p>
+      {children}
+    </div>
+  );
+  return (
+    <div className="space-y-3">
+      <p className="text-xs font-semibold uppercase tracking-wide text-forest-700">
+        Republic of the Philippines · Department of Health · {title}
+      </p>
+
+      <div className="grid gap-3 sm:grid-cols-4">
+        {tileField("surname", "Surname", "Surname")}
+        {tileField("first_name", "First Name", "First name")}
+        {tileField("middle_name", "Middle Name", "Middle name")}
+        {tileField("birthdate", "Date of Birth", "", "date")}
+        {tileField("place_of_birth", "Place of Birth", "Place of birth")}
+        <div className={tile}>
+          <p className={tileLabel}>Age / Sex</p>
+          <div className="mt-0.5 flex items-center gap-1 text-sm font-semibold text-forest-950">
+            <span>{age ?? "—"}</span>
+            <span>/</span>
+            <select
+              disabled={readOnly}
+              value={value.sex || ""}
+              onChange={(e) => set("sex", e.target.value)}
+              className="bg-transparent font-semibold outline-none disabled:opacity-100"
+            >
+              <option value="">—</option>
+              <option value="Male">Male</option>
+              <option value="Female">Female</option>
+            </select>
+          </div>
+        </div>
+        <div className={tile}>
+          <p className={tileLabel}>Gender</p>
+          <select
+            disabled={readOnly}
+            value={value.gender || ""}
+            onChange={(e) => set("gender", e.target.value)}
+            className="mt-0.5 w-full bg-transparent text-sm font-semibold text-forest-950 outline-none disabled:opacity-100"
+          >
+            <option value="">{readOnly ? "—" : "Select gender"}</option>
+            {GENDER_OPTIONS.map((g) => (
+              <option key={g} value={g}>
+                {g}
+              </option>
+            ))}
+            {value.gender && !GENDER_OPTIONS.includes(value.gender) && <option value={value.gender}>{value.gender}</option>}
+          </select>
+          {value.gender === "I use a different term" && (
+            <input
+              disabled={readOnly}
+              value={value.gender_other || ""}
+              placeholder={readOnly ? "—" : "Type the term"}
+              onChange={(e) => set("gender_other", e.target.value)}
+              className="mt-1 w-full border-b border-cream-200 bg-transparent text-sm font-semibold text-forest-950 outline-none placeholder:font-normal placeholder:text-forest-500"
+            />
+          )}
+        </div>
+        {tileField("cellphone_no", "Cell Phone Number", "09XX XXX XXXX")}
+        {tileField("occupation", "Occupation", "Occupation")}
+        <div className={`${tile} sm:col-span-2`}>
+          <p className={tileLabel}>Address</p>
+          <div className="mt-0.5 flex flex-wrap gap-2">
+            <select
+              disabled={readOnly}
+              value={value.barangay || ""}
+              onChange={(e) => set("barangay", e.target.value)}
+              className="rounded-lg bg-cream-50 px-2 py-0.5 text-sm font-semibold text-forest-950 disabled:bg-transparent"
+            >
+              {BARANGAY_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+              {value.barangay && !TAYABAS_BARANGAYS.includes(value.barangay) && (
+                <option value={value.barangay}>{value.barangay}</option>
+              )}
+            </select>
+            <input
+              disabled={readOnly}
+              value={value.address || ""}
+              placeholder={readOnly ? "—" : "Street / address"}
+              onChange={(e) => set("address", e.target.value)}
+              className="min-w-0 flex-1 bg-transparent text-sm font-semibold text-forest-950 outline-none placeholder:font-normal placeholder:text-forest-500"
+            />
+          </div>
+        </div>
+        {tileField("parent_guardian", "Parent / Guardian", "Parent or guardian's name (optional)")}
+      </div>
+
+      {typeFlags &&
+        box(
+          "Patient Type (this visit only)",
+          <PatientTypeButtons
+            values={typeFlags}
+            sex={value.sex}
+            age={age ?? null}
+            disabled={readOnly}
+            onToggle={onToggleType}
+          />
+        )}
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        {box("Other Patient Information (Membership)", [
+          yesNo("is_nhts_pr", "NHTS-PR"),
+          yesNo("is_4ps", "4Ps"),
+          yesNo("is_indigenous_people", "Indigenous People (IP)"),
+          text("philhealth_no", "PhilHealth No.", "PhilHealth No."),
+          text("sss_no", "SSS No.", "SSS No."),
+          text("gsis_no", "GSIS No.", "GSIS No."),
+        ])}
+        {box("Vital Signs", [
+          text("blood_pressure", "Blood Pressure", "e.g. 120/80"),
+          text("pulse_rate", "Pulse Rate", "bpm"),
+          text("temperature", "Temperature", "°C"),
+        ])}
+        {box("Medical History", [
+          text("allergies", "Allergies"),
+          yesNo("has_hypertension_cva", "Hypertension / CVA"),
+          yesNo("has_diabetes_mellitus", "Diabetes Mellitus"),
+          yesNo("has_blood_disorders", "Blood Disorders"),
+          yesNo("has_cardio_heart_disease", "Cardiovascular / Heart Diseases"),
+          yesNo("has_thyroid_disorders", "Thyroid Disorders"),
+          text("hepatitis", "Hepatitis"),
+          text("malignancy", "Malignancy"),
+        ])}
+        {box("History of Previous Hospitalization", [
+          text("hosp_medical", "Medical"),
+          text("hosp_surgical", "Surgical"),
+          text("hosp_blood_transfusion", "Blood Transfusion"),
+          yesNo("has_tattoo", "Tattoo"),
+          text("hosp_others", "Others"),
+        ])}
+        {box("Dietary Habits / Social History", [
+          text("diet_sugar_beverages", "Sugar Sweetened Beverages / Food"),
+          text("diet_alcohol", "Use of Alcohol"),
+          text("diet_tobacco", "Use of Tobacco"),
+          text("diet_betel_nut", "Betel Nut Chewing"),
+        ])}
+        <div className="rounded-2xl bg-cream-200 p-5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-forest-700">Conforme</p>
+          <input
+            disabled={readOnly}
+            value={value.conforme_name || ""}
+            placeholder={readOnly ? "—" : "Type full name to confirm"}
+            onChange={(e) => set("conforme_name", e.target.value)}
+            className="mt-6 w-full border-b border-forest-900 bg-transparent px-1 py-1 text-sm text-forest-950 outline-none placeholder:text-forest-500"
+          />
+          <p className="mt-1 text-xs text-forest-600">Patient's / Guardian's Name and Signature</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Full set of fields collected up front in the "New Patient Record" modal —
 // mirrors every field editable later in the Individual Patient Treatment
 // Record below, so a walk-in can be fully registered in one sitting instead
@@ -258,6 +593,8 @@ const EMPTY_NEW_PATIENT_FORM = {
   birthdate: "",
   place_of_birth: "",
   sex: "",
+  gender: "",
+  gender_other: "",
   barangay: "",
   address: "",
   occupation: "",
@@ -595,8 +932,9 @@ export default function AdminPatients({ readOnly = false }) {
   const isAdmin = user?.role === "admin";
   const canEdit = user?.role === "admin" || user?.role === "doctor";
   const [patients, setPatients] = useState([]);
+  const [loaded, setLoaded] = useState(false); // false until the first list request finishes (shows skeleton rows)
+  const [statusFilter, setStatusFilter] = useState(null); // "Completed" | "Not Completed" | "Pending" | null
   const [selected, setSelected] = useState(null);
-  const [showDetails, setShowDetails] = useState(true);
   // Clicking a patient row opens the Service History popup automatically.
   // Inside that popup, two green buttons ("Individual Patient Treatment
   // Record" and "Patient Summary") close it and open their own separate
@@ -607,7 +945,6 @@ export default function AdminPatients({ readOnly = false }) {
   // the Log in / Sign up popups use), so clicking outside the open popup
   // closes it.
   const [showHistoryModal, setShowHistoryModal] = useState(false);
-  const [showTreatmentModal, setShowTreatmentModal] = useState(false);
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [records, setRecords] = useState([]);
   // Which Service History row is currently in edit mode (its pencil icon was
@@ -626,7 +963,12 @@ export default function AdminPatients({ readOnly = false }) {
     dentist: "",
     notes: "",
     type: { is_pwd: false, is_senior_citizen: false, is_pregnant: false },
+    treatment: treatmentFromPatient(null),
   });
+  // Treatment Record of the visit being added (starts as a copy of the last visit's) and the
+  // popup that shows one: "add" | "edit" | { view: serviceRecord }.
+  const [addTreatment, setAddTreatment] = useState(treatmentFromPatient(null));
+  const [treatmentPopup, setTreatmentPopup] = useState(null);
   const [savingRecordEdit, setSavingRecordEdit] = useState(false);
   const [recordEditError, setRecordEditError] = useState("");
   const [dentists, setDentists] = useState([]);
@@ -699,7 +1041,7 @@ export default function AdminPatients({ readOnly = false }) {
   const [chartConfirmed, setChartConfirmed] = useState(false);
 
   function loadPatients() {
-    api.get("/patients").then(setPatients).catch(() => {});
+    api.get("/patients").then(setPatients).catch(() => {}).finally(() => setLoaded(true));
   }
   useEffect(loadPatients, []);
 
@@ -729,13 +1071,13 @@ export default function AdminPatients({ readOnly = false }) {
   // Status shown as a colored pill in the patient list. Based on the most
   // recently logged procedure and how many times that exact procedure has
   // been logged for this patient:
-  //   - no visits yet at all                              -> "Pending"
-  //   - latest procedure logged fewer times than required
-  //     (e.g. a 2-visit service the patient hasn't returned for) -> "Not Completed"
-  //   - latest procedure has reached its required visit count   -> "Completed"
-  // Visit-count numbers come straight from the /patients list query
-  // (latest_procedure / latest_procedure_visits) so this stays accurate
-  // without needing every record for every patient on this screen.
+  //   - no visits yet at all                                   -> "Pending"
+  //   - 2-visit service, still inside the return window         -> "Pending"
+  //   - 2-visit service, return window passed without a return  -> "Not Completed"
+  //   - latest procedure has reached its required visits        -> "Completed"
+  // The return window (RETURN_WINDOW in lib/services.js) is counted from the
+  // 1st visit. Dates come from the /patients list query
+  // (latest_procedure / latest_procedure_dates).
   const STATUS_STYLES = {
     Completed: "bg-leaf-200 text-forest-900",
     "Not Completed": "bg-forest-900 text-cream-50",
@@ -744,6 +1086,8 @@ export default function AdminPatients({ readOnly = false }) {
 
   function statusFor(patient) {
     if (!patient.visit_count) return "Pending";
+    const byDate = statusForLatestService(patient.latest_procedure, patient.latest_procedure_dates);
+    if (byDate) return byDate;
     const required = visitsRequiredFor(patient.latest_procedure);
     const done = patient.latest_procedure_visits || 0;
     return done >= required ? "Completed" : "Not Completed";
@@ -751,7 +1095,7 @@ export default function AdminPatients({ readOnly = false }) {
 
   // Per-record Completed / Not Completed status for the currently open
   // patient's Individual Patient Treatment Record table below (see
-  // computeRecordStatuses in lib/services.js for the 4-month-interval rule).
+  // computeRecordStatuses in lib/services.js for the return-window rule).
   // Recomputed only when the loaded records list actually changes.
   const recordStatuses = useMemo(() => computeRecordStatuses(records), [records]);
 
@@ -760,12 +1104,11 @@ export default function AdminPatients({ readOnly = false }) {
   // Record fields) rather than relying on the row object from the list,
   // which only carries a subset of columns.
   async function openPatient(p) {
-    setShowDetails(true);
     setDuplicateWarning(null);
-    // Opens the Service History popup right away; the Treatment Record and
-    // Summary popups start closed until their green buttons are clicked.
+    // Opens the Service History popup right away; the Patient Summary
+    // popup starts closed until its green button is clicked.
     setShowHistoryModal(true);
-    setShowTreatmentModal(false);
+    setTreatmentPopup(null);
     setShowSummaryModal(false);
     setShowAddRecordModal(false);
     setEditingRecordId(null);
@@ -978,6 +1321,7 @@ export default function AdminPatients({ readOnly = false }) {
         dentist: newPatientForm.initial_dentist,
         notes: newPatientForm.initial_notes,
         patient_type: typeSnapshot(restBody),
+        treatment_record: treatmentFromPatient(restBody),
       });
 
       // Save the Oral Health Chart the admin filled in (teeth left alone are
@@ -1104,6 +1448,7 @@ export default function AdminPatients({ readOnly = false }) {
         patient_id: selected.id,
         teeth: addRecordTeeth,
         patient_type: visitTypeSnapshot,
+        treatment_record: addTreatment,
       });
       setRecords((list) => [{ ...row, patient_type: row.patient_type ?? visitTypeSnapshot }, ...list]);
       setNewRecord({ record_date: "", procedure: "", dentist: "", notes: "" });
@@ -1167,12 +1512,14 @@ export default function AdminPatients({ readOnly = false }) {
       dentist: record.dentist || "",
       notes: record.notes || "",
       type: visitTypeFlags(record.patient_type, selected, visitAge(record, selected), selected?.sex),
+      treatment: treatmentForRecord(record, selected),
     });
     setEditingRecordId(record.id);
     setShowHistoryModal(false); // the edit opens as its own popup
   }
 
   function cancelEditRecord() {
+    setTreatmentPopup(null);
     setEditingRecordId(null);
     setRecordEditError("");
     setShowHistoryModal(true); // back to Service History
@@ -1200,6 +1547,8 @@ export default function AdminPatients({ readOnly = false }) {
     const editedSnapshot = typeSnapshot(editedType);
     const shownSnapshot = typeSnapshot(visitTypeFlags(record.patient_type, selected, visitAge(record, selected), selected.sex));
     if (editedSnapshot !== shownSnapshot) body.patient_type = editedSnapshot;
+    // Treatment Record of this visit (only sent when it was changed).
+    if (!sameTreatment(recordDraft.treatment, treatmentForRecord(record, selected))) body.treatment_record = recordDraft.treatment;
 
     if (!Object.keys(body).length) {
       cancelEditRecord();
@@ -1321,10 +1670,6 @@ export default function AdminPatients({ readOnly = false }) {
     }
   }
 
-  function printTable() {
-    window.print();
-  }
-
   // Small helper for the New Patient modal's plain controlled inputs —
   // updates one field of newPatientForm.
   function setNewPatientField(field, value) {
@@ -1366,7 +1711,11 @@ export default function AdminPatients({ readOnly = false }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id, selected?.age, selected?.birthdate, selected?.sex, selected?.is_senior_citizen, selected?.is_pregnant]);
 
-  const filtered = search.trim() ? patients.filter((p) => patientMatchesSearch(p, search, statusFor(p))) : patients;
+  const statusCounts = { Completed: 0, "Not Completed": 0, Pending: 0 };
+  for (const p of patients) statusCounts[statusFor(p)] += 1;
+  const filtered = patients.filter(
+    (p) => (!statusFilter || statusFor(p) === statusFilter) && (!search.trim() || patientMatchesSearch(p, search, statusFor(p)))
+  );
 
   return (
     <div className="patient-page space-y-6">
@@ -1380,7 +1729,21 @@ export default function AdminPatients({ readOnly = false }) {
         ))}
       </datalist>
       <style>{`
+        @keyframes pm-row-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        @keyframes pm-pulse { 0% { box-shadow: 0 0 0 0 rgb(124 200 92 / 0.55); } 70% { box-shadow: 0 0 0 7px rgb(124 200 92 / 0); } 100% { box-shadow: 0 0 0 0 rgb(124 200 92 / 0); } }
+        @keyframes pm-shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+        @keyframes pm-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+        .pm-row { animation: pm-row-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+        .pm-row td:first-child { transition: box-shadow 0.15s ease; }
+        .pm-row:hover td:first-child { box-shadow: inset 3px 0 0 #40916c; }
+        .pm-dot { display: inline-block; width: 7px; height: 7px; border-radius: 9999px; background: #7cc85c; animation: pm-pulse 1.8s ease-out infinite; }
+        .pm-skel { background: linear-gradient(90deg, #ece6d2 25%, #f6f2e3 50%, #ece6d2 75%); background-size: 200% 100%; animation: pm-shimmer 1.3s linear infinite; border-radius: 8px; }
+        .pm-chip { transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, background-color 0.15s ease; }
+        .pm-chip:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgb(0 0 0 / 0.08); }
+        .pm-bar { transform-origin: left; animation: pm-fill 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+        @media (prefers-reduced-motion: reduce) { .pm-row, .pm-dot, .pm-skel, .pm-bar { animation: none !important; } }
         @media print {
+          .pm-row { animation: none !important; }
           body * { visibility: hidden; }
           #printable-patient-table, #printable-patient-table * { visibility: visible; }
           #printable-patient-table { position: absolute; left: 0; top: 0; width: 100%; }
@@ -1410,12 +1773,6 @@ export default function AdminPatients({ readOnly = false }) {
               className="bg-forest-900 text-cream-50 text-sm font-semibold rounded-full px-4 py-2 hover:bg-forest-800 disabled:opacity-60"
             >
               {addingRow ? "Adding…" : "+ New patient record"}
-            </button>
-            <button
-              onClick={printTable}
-              className="patient-action bg-cream-50 border border-forest-900 text-forest-900"
-            >
-              🖨 Print
             </button>
             <fieldset disabled={readOnly} style={{ display: "contents" }}>
               <label className="patient-action bg-cream-50 border border-forest-900 text-forest-900 cursor-pointer">
@@ -1449,6 +1806,46 @@ export default function AdminPatients({ readOnly = false }) {
           )}
         </div>
       </div>
+
+      {/* ---------- Overview: click a box to filter the list below by that status ---------- */}
+      {loaded && patients.length > 0 && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 print:hidden" aria-label="Patient overview">
+          {[
+            { key: null, label: "All Patients", value: patients.length, color: "#2f6f4f", hint: "Every record on file", Icon: Users },
+            { key: "Completed", label: "Completed", value: statusCounts.Completed, color: "#7cc85c", hint: "Treatment finished", Icon: CheckCircle2 },
+            { key: "Not Completed", label: "Not Completed", value: statusCounts["Not Completed"], color: "#253522", hint: "Did not return in time", Icon: XCircle },
+            { key: "Pending", label: "Pending", value: statusCounts.Pending, color: "#c9a227", hint: "Waiting for return visit", Icon: Clock },
+          ].map((c) => {
+            const active = statusFilter === c.key;
+            const share = patients.length ? (c.value / patients.length) * 100 : 0;
+            return (
+              <button
+                key={c.label}
+                type="button"
+                onClick={() => setStatusFilter(active && c.key !== null ? null : c.key)}
+                aria-pressed={active}
+                className={`pm-chip rounded-2xl border p-4 text-left ${
+                  active ? "border-cream-200 bg-white shadow-md" : "border-cream-200 bg-white"
+                }`}
+              >
+                <span className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-forest-600">{c.label}</span>
+                  <span className="flex h-7 w-7 items-center justify-center rounded-lg" style={{ backgroundColor: `${c.color}22`, color: c.color }}>
+                    <c.Icon size={16} />
+                  </span>
+                </span>
+                <span className="mt-2 block font-display text-3xl font-extrabold tabular-nums leading-none text-forest-950">
+                  <AnimatedNumber value={c.value} />
+                </span>
+                <span className="mt-2 block h-1.5 overflow-hidden rounded-full bg-cream-200">
+                  <span className="pm-bar block h-1.5 rounded-full" style={{ width: `${c.key === null ? 100 : Math.max(share, c.value ? 3 : 0)}%`, backgroundColor: c.color }} />
+                </span>
+                <span className="mt-1.5 block text-xs text-forest-600">{c.key === null ? c.hint : `${Math.round(share)}% · ${c.hint}`}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* ---------- New Patient Record modal (full intake form) ---------- */}
       {showNewPatientForm && (
@@ -1542,6 +1939,30 @@ export default function AdminPatients({ readOnly = false }) {
                   <option value="Male">Male</option>
                   <option value="Female">Female</option>
                 </select>
+              </label>
+
+              <label className="text-xs text-forest-700">
+                Gender
+                <select
+                  className="patient-input"
+                  value={newPatientForm.gender}
+                  onChange={(e) => setNewPatientField("gender", e.target.value)}
+                >
+                  <option value="">Select gender</option>
+                  {GENDER_OPTIONS.map((g) => (
+                    <option key={g} value={g}>
+                      {g}
+                    </option>
+                  ))}
+                </select>
+                {newPatientForm.gender === "I use a different term" && (
+                  <input
+                    className="patient-input mt-1.5"
+                    placeholder="Type the term"
+                    value={newPatientForm.gender_other}
+                    onChange={(e) => setNewPatientField("gender_other", e.target.value)}
+                  />
+                )}
               </label>
 
               <label className="text-xs text-forest-700 sm:col-span-2">
@@ -1957,9 +2378,19 @@ export default function AdminPatients({ readOnly = false }) {
       {/* ---------- STEP 4: patient list (full width) ---------- */}
       <div id="printable-patient-table">
         <Card
-          title={`All Patients — ${filtered.length}${search ? ` of ${patients.length}` : ""} records`}
+          title={`${statusFilter ? `${statusFilter} Patients` : "All Patients"} — ${filtered.length}${search || statusFilter ? ` of ${patients.length}` : ""} records`}
           action={
             <div className="flex items-center gap-2 print:hidden">
+              {statusFilter && (
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter(null)}
+                  className="rounded-full border border-forest-900 bg-cream-100 px-3 py-1 text-xs font-semibold text-forest-900 hover:bg-cream-200"
+                  title="Show every patient again"
+                >
+                  {statusFilter} ✕
+                </button>
+              )}
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -2000,6 +2431,7 @@ export default function AdminPatients({ readOnly = false }) {
                     <th className="py-2 px-2">Brgy.</th>
                     <th className="py-2 px-2">Age</th>
                     <th className="py-2 px-2">Sex</th>
+                    <th className="py-2 px-2">Gender</th>
                     <th className="py-2 px-2">Patient Type</th>
                     <th className="py-2 px-2 text-center">DMFT</th>
                     <th className="py-2 px-2">Dentist</th>
@@ -2007,23 +2439,33 @@ export default function AdminPatients({ readOnly = false }) {
                     <th className="py-2 px-2 print:hidden"></th>
                   </tr>
                 </thead>
-                <tbody>
-                  {filtered.map((p) => (
+                <tbody key={statusFilter || "all"}>
+                  {filtered.map((p, rowIndex) => (
                     <tr
                       key={p.id}
-                      className={`border-t border-cream-200 align-top cursor-pointer ${
+                      className={`pm-row border-t border-cream-200 align-top cursor-pointer ${
                         selected?.id === p.id ? "bg-cream-100" : ""
                       }`}
+                      style={{ animationDelay: `${Math.min(rowIndex, 14) * 30}ms` }}
                       onClick={() => openPatient(p)}
                     >
                       <td className="px-2 py-2">
-                        <p className="font-semibold text-forest-950">{p.name}</p>
+                        <p className="font-semibold text-forest-950">
+                          {p.name}
+                          {isRecentlyAdded(p) && (
+                            <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-leaf-200 px-2 py-0.5 align-middle text-[10px] font-bold uppercase tracking-wide text-forest-900" title="Added in the last 3 days">
+                              <span className="pm-dot" />
+                              New
+                            </span>
+                          )}
+                        </p>
                         <p className="text-xs text-forest-500">PT-{String(p.id).padStart(4, "0")}</p>
                         <EditedBy row={p} className="print:hidden" />
                       </td>
                       <td className="px-2 py-2 text-forest-700">{p.barangay || "—"}</td>
                       <td className="px-2 py-2 text-forest-700">{p.age ?? "—"}</td>
                       <td className="px-2 py-2 text-forest-700">{p.sex || "—"}</td>
+                      <td className="px-2 py-2 text-forest-700">{genderLabel(p)}</td>
                       <td className="px-2 py-2">
                         {Number(p.is_pwd) || listSenior(p) || Number(p.is_pregnant) ? (
                           <div className="flex flex-wrap gap-1">
@@ -2045,10 +2487,15 @@ export default function AdminPatients({ readOnly = false }) {
                       <td className="px-2 py-2 text-forest-700">{p.latest_dentist || "—"}</td>
                       <td className="px-2 py-2">
                         <span
+                          title={(() => {
+                            const w = statusFor(p) === "Pending" ? openReturnWindow(p.latest_procedure, p.latest_procedure_dates) : null;
+                            return w ? `Return between ${w.from.toLocaleDateString()} and ${w.to.toLocaleDateString()}` : undefined;
+                          })()}
                           className={`inline-block text-xs font-semibold rounded-full px-3 py-1 whitespace-nowrap ${
                             STATUS_STYLES[statusFor(p)]
                           }`}
                         >
+                          {statusFor(p) === "Pending" && <span className="pm-dot mr-1.5" style={{ background: "#c9a227" }} />}
                           {statusFor(p)}
                         </span>
                       </td>
@@ -2089,8 +2536,24 @@ export default function AdminPatients({ readOnly = false }) {
                 </tbody>
               </table>
             </div>
+          ) : !loaded ? (
+            <div className="space-y-3 py-1" aria-busy="true" aria-label="Loading patients">
+              {[0, 1, 2, 3, 4, 5].map((i) => (
+                <div key={i} className="flex items-center gap-4">
+                  <div className="pm-skel h-9 w-9 shrink-0 rounded-full" />
+                  <div className="flex-1 space-y-2">
+                    <div className="pm-skel h-3 w-1/3" />
+                    <div className="pm-skel h-2.5 w-1/5" />
+                  </div>
+                  <div className="pm-skel hidden h-3 w-24 sm:block" />
+                  <div className="pm-skel h-6 w-20 rounded-full" />
+                </div>
+              ))}
+            </div>
           ) : (
-            <EmptyState>{search ? "No patients match that search." : "No registered patients yet."}</EmptyState>
+            <EmptyState>
+              {search || statusFilter ? "No patients match that search." : "No registered patients yet."}
+            </EmptyState>
           )}
         </Card>
       </div>
@@ -2124,14 +2587,14 @@ export default function AdminPatients({ readOnly = false }) {
               <div className="max-h-[320px] overflow-y-auto overflow-x-hidden">
                 <table className="w-full text-sm table-fixed">
                   <colgroup>
-                    <col style={{ width: "11%" }} />
-                    <col style={{ width: "15%" }} />
+                    <col style={{ width: "10%" }} />
+                    <col style={{ width: "14%" }} />
                     <col style={{ width: "12%" }} />
                     <col style={{ width: "13%" }} />
-                    <col style={{ width: "15%" }} />
-                    <col style={{ width: "11%" }} />
-                    <col style={{ width: "15%" }} />
-                    <col style={{ width: "8%" }} />
+                    <col style={{ width: "14%" }} />
+                    <col style={{ width: "10%" }} />
+                    <col style={{ width: "14%" }} />
+                    <col style={{ width: "13%" }} />
                   </colgroup>
                   <thead>
                     <tr className="text-left text-forest-700 uppercase text-xs">
@@ -2184,6 +2647,15 @@ export default function AdminPatients({ readOnly = false }) {
                           </td>
                           <td className="py-2 text-right print:hidden">
                             <div className="inline-flex items-center justify-end">
+                              <button
+                                type="button"
+                                title="Treatment record of this visit"
+                                aria-label="View treatment record"
+                                onClick={() => setTreatmentPopup({ view: r })}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-forest-800 hover:bg-cream-200"
+                              >
+                                <ClipboardList size={16} />
+                              </button>
                               {canEdit && (
                                 <button
                                   type="button"
@@ -2216,11 +2688,13 @@ export default function AdminPatients({ readOnly = false }) {
             ) : (
               <EmptyState>No service history yet for this patient.</EmptyState>
             )}
-            <div className="grid gap-3 pt-2 border-t border-cream-200 sm:grid-cols-3">
+            <div className="grid gap-3 pt-2 border-t border-cream-200 sm:grid-cols-2">
               <button
                 type="button"
                 onClick={() => {
                   setAddRecordError("");
+                  setAddTreatment({ ...treatmentForRecord(records[0], selected), blood_pressure: "", pulse_rate: "", temperature: "" }); // starts as a copy of the last visit's
+                  setTreatmentPopup(null);
                   setAddRecordType({
                     is_pwd: flagOn(selected.is_pwd),
                     is_senior_citizen: flagOn(selected.is_senior_citizen),
@@ -2237,21 +2711,11 @@ export default function AdminPatients({ readOnly = false }) {
                 type="button"
                 onClick={() => {
                   setShowHistoryModal(false);
-                  setShowTreatmentModal(true);
-                }}
-                className="rounded-full bg-forest-900 text-cream-50 text-sm font-semibold px-4 py-3 hover:bg-forest-800"
-              >
-                Individual Patient Treatment Record
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowHistoryModal(false);
                   setShowSummaryModal(true);
                 }}
                 className="rounded-full bg-forest-900 text-cream-50 text-sm font-semibold px-4 py-3 hover:bg-forest-800"
               >
-                Patient Summary
+                Patient Summary Records
               </button>
             </div>
           </div>
@@ -2329,6 +2793,17 @@ export default function AdminPatients({ readOnly = false }) {
                     />
                   </div>
                 </div>
+              </div>
+
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-cream-200 bg-cream-50 px-3 py-2">
+                <p className="text-sm font-semibold text-forest-950">Treatment Record (this visit)</p>
+                <button
+                  type="button"
+                  onClick={() => setTreatmentPopup("edit")}
+                  className="rounded-full bg-forest-900 px-4 py-1.5 text-sm font-semibold text-cream-50 hover:bg-forest-800"
+                >
+                  Open
+                </button>
               </div>
 
               <label className="block text-sm font-semibold text-forest-950">
@@ -2487,8 +2962,24 @@ export default function AdminPatients({ readOnly = false }) {
                 />
                 <p className="mt-2 text-xs text-forest-500">
                   Update this if the patient's status changed since the last visit (for example, no longer pregnant).
-                  It also updates the Individual Patient Treatment Record.
+                  It is saved with this visit only.
                 </p>
+              </div>
+
+              <div className="col-span-2 flex items-center justify-between gap-3 rounded-xl border border-cream-200 bg-cream-50 px-4 py-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-forest-700">Treatment Record</p>
+                  <p className="text-xs text-forest-500">
+                    Copied from the last visit. Open it to update it, or leave it as it is.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setTreatmentPopup("add")}
+                  className="shrink-0 rounded-full bg-forest-900 px-4 py-2 text-sm font-semibold text-cream-50 hover:bg-forest-800"
+                >
+                  Treatment Record
+                </button>
               </div>
 
               <div className="col-span-2 pt-2">
@@ -2518,38 +3009,52 @@ export default function AdminPatients({ readOnly = false }) {
         )}
       </Modal>
 
-      {/* ---------- Individual Patient Treatment Record popup ---------- */}
+      {/* ---------- Patient Summary Records popup ---------- */}
       <Modal
-        isOpen={showTreatmentModal && !!selected}
+        isOpen={showSummaryModal && !!selected}
         onClose={() => {
-          setShowTreatmentModal(false);
+          setShowSummaryModal(false);
           setShowHistoryModal(true);
         }}
-        size="2xl"
+        size="xl"
       >
         {selected && (
-          <div className="space-y-4">
+          <div className="space-y-5">
             <div>
-              <h3 className="font-display text-lg font-bold text-forest-950">Individual Patient Treatment Record</h3>
+              <EditableCell
+                value={selected.name}
+                placeholder="Patient name"
+                onSave={(v) => savePatientField(selected, "name", v)}
+                className="font-display text-xl font-bold text-forest-950"
+              />
               <p className="text-sm text-forest-500 mt-0.5">
-                {selected.name} · PT-{String(selected.id).padStart(4, "0")}
+                PT-{String(selected.id).padStart(4, "0")}
+                {records[0]?.dentist ? ` · ${/^dr\.?\s/i.test(records[0].dentist.trim()) ? "" : "Dr. "}${records[0].dentist.trim()}` : ""}
               </p>
             </div>
-            {showDetails && (
-              <div className="space-y-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-forest-700">
-                  Republic of the Philippines · Department of Health · {selected.name} (PT-
-                  {String(selected.id).padStart(4, "0")})
-                </p>
 
-                {/* Basic demographic fields — editable pill chips, arranged
-                    in 3 rows: (1) Surname/First Name/Middle Name/Date of
-                    Birth, (2) Place of Birth/Age-Sex/Cell Phone Number/
-                    Occupation, (3) Address (wider, since it carries the
-                    barangay select + street input + preview line) and
-                    Parent/Guardian. Each pill is w-full so it fills its
-                    grid cell instead of shrinking to its content. */}
-                <div className="grid sm:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-cream-100 rounded-xl px-5 py-4">
+                <p className="text-xs uppercase tracking-wide text-forest-700">Barangay</p>
+                <EditableCell
+                  value={selected.barangay}
+                  placeholder="Barangay"
+                  onSave={(v) => savePatientField(selected, "barangay", v)}
+                  className="font-semibold text-forest-950 text-lg"
+                />
+              </div>
+              <div className="bg-cream-100 rounded-xl px-5 py-4">
+                <p className="text-xs uppercase tracking-wide text-forest-700">Last visit</p>
+                <p className="font-semibold text-forest-950 text-lg">
+                  {records[0]?.record_date ? new Date(records[0].record_date).toLocaleDateString() : "—"}
+                </p>
+              </div>
+            </div>
+
+            {/* Patient details (they belong to the patient, not to one visit) */}
+            <div className="space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-forest-700">Patient Details</p>
+              <div className="grid sm:grid-cols-4 gap-3">
                   {/* Row 1 */}
                   <div className="bg-cream-100 rounded-xl px-3 py-1.5 w-full">
                     <p className="text-[10px] uppercase tracking-wide text-forest-700">Surname</p>
@@ -2612,6 +3117,24 @@ export default function AdminPatients({ readOnly = false }) {
                     </div>
                   </div>
                   <div className="bg-cream-100 rounded-xl px-3 py-1.5 w-full">
+                    <p className="text-[10px] uppercase tracking-wide text-forest-700">Gender</p>
+                    <EditableCell
+                      value={selected.gender || ""}
+                      type="select"
+                      options={GENDER_SELECT_OPTIONS}
+                      onSave={(v) => savePatientField(selected, "gender", v)}
+                      className="font-semibold text-forest-950"
+                    />
+                    {selected.gender === "I use a different term" && (
+                      <EditableCell
+                        value={selected.gender_other}
+                        placeholder="Type the term"
+                        onSave={(v) => savePatientField(selected, "gender_other", v)}
+                        className="font-semibold text-forest-950"
+                      />
+                    )}
+                  </div>
+                  <div className="bg-cream-100 rounded-xl px-3 py-1.5 w-full">
                     <p className="text-[10px] uppercase tracking-wide text-forest-700">Cell Phone Number</p>
                     <EditableCell
                       value={selected.cellphone_no}
@@ -2631,7 +3154,7 @@ export default function AdminPatients({ readOnly = false }) {
                   </div>
 
                   {/* Row 3 */}
-                  <div className="bg-cream-100 rounded-xl px-3 py-1.5 w-full sm:col-span-3 overflow-x-auto">
+                  <div className="bg-cream-100 rounded-xl px-3 py-1.5 w-full sm:col-span-2 overflow-x-auto">
                     <p className="text-[10px] uppercase tracking-wide text-forest-700">Address</p>
                     <div className="mt-0.5">
                       <AddressLineCell
@@ -2674,290 +3197,6 @@ export default function AdminPatients({ readOnly = false }) {
                     patients.
                   </p>
                 </div>
-
-                {/* Box 1: Other Patient Information (Membership) + Vital Signs */}
-                <div className="grid sm:grid-cols-2 gap-4">
-                  <div className="bg-white border border-cream-200 rounded-2xl p-5">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-forest-700 mb-2">
-                      Other Patient Information (Membership)
-                    </p>
-                    {MEMBERSHIP_FIELDS.map(({ field, label }) => (
-                      <div
-                        key={field}
-                        className="flex justify-between items-baseline py-2 border-b border-dashed border-cream-200"
-                      >
-                        <span className="text-forest-600 text-sm shrink-0">{label}</span>
-                        <EditableCell
-                          value={String(!!selected[field])}
-                          type="select"
-                          options={YES_NO}
-                          onSave={(v) => savePatientField(selected, field, v)}
-                        />
-                      </div>
-                    ))}
-                    <div className="flex justify-between items-baseline py-2 border-b border-dashed border-cream-200">
-                      <span className="text-forest-600 text-sm shrink-0">PhilHealth No.</span>
-                      <EditableCell
-                        value={selected.philhealth_no}
-                        placeholder="PhilHealth No."
-                        onSave={(v) => savePatientField(selected, "philhealth_no", v)}
-                      />
-                    </div>
-                    <div className="flex justify-between items-baseline py-2 border-b border-dashed border-cream-200">
-                      <span className="text-forest-600 text-sm shrink-0">SSS No.</span>
-                      <EditableCell
-                        value={selected.sss_no}
-                        placeholder="SSS No."
-                        onSave={(v) => savePatientField(selected, "sss_no", v)}
-                      />
-                    </div>
-                    <div className="flex justify-between items-baseline py-2 last:border-0">
-                      <span className="text-forest-600 text-sm shrink-0">GSIS No.</span>
-                      <EditableCell
-                        value={selected.gsis_no}
-                        placeholder="GSIS No."
-                        onSave={(v) => savePatientField(selected, "gsis_no", v)}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="bg-white border border-cream-200 rounded-2xl p-5 space-y-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-forest-700">Vital Signs</p>
-                    <p className="text-xs text-forest-500">
-                      Latest reading
-                      {selected.vitals?.recorded_at ? ` — ${new Date(selected.vitals.recorded_at).toLocaleString()}` : ""}
-                    </p>
-                    <form onSubmit={saveVitals} className="grid grid-cols-2 gap-2">
-                      <input
-                        placeholder="Blood Pressure"
-                        value={vitalsForm.blood_pressure}
-                        onChange={(e) => setVitalsForm((f) => ({ ...f, blood_pressure: e.target.value }))}
-                        className="rounded-lg border border-cream-200 bg-white px-3 py-2 text-sm"
-                      />
-                      <input
-                        placeholder="Pulse Rate"
-                        value={vitalsForm.pulse_rate}
-                        onChange={(e) => setVitalsForm((f) => ({ ...f, pulse_rate: e.target.value }))}
-                        className="rounded-lg border border-cream-200 bg-white px-3 py-2 text-sm"
-                      />
-                      <input
-                        placeholder="Temperature"
-                        value={vitalsForm.temperature}
-                        onChange={(e) => setVitalsForm((f) => ({ ...f, temperature: e.target.value }))}
-                        className="col-span-2 rounded-lg border border-cream-200 bg-white px-3 py-2 text-sm"
-                      />
-                      <button
-                        disabled={savingVitals}
-                        className="col-span-2 bg-forest-900 text-cream-50 text-xs font-semibold rounded-full py-2 hover:bg-forest-800 disabled:opacity-60"
-                      >
-                        {savingVitals ? "Saving…" : "Save vitals"}
-                      </button>
-                    </form>
-                  </div>
-                </div>
-
-                {/* Box 2: Medical History + History of Previous Hospitalization */}
-                <div className="grid sm:grid-cols-2 gap-4">
-                  <div className="bg-white border border-cream-200 rounded-2xl p-5">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-forest-700 mb-2">
-                      Medical History
-                    </p>
-                    <div className="flex justify-between items-baseline py-2 border-b border-dashed border-cream-200">
-                      <span className="text-forest-600 text-sm shrink-0">Allergies</span>
-                      <EditableCell
-                        value={selected.allergies}
-                        placeholder="None"
-                        onSave={(v) => savePatientField(selected, "allergies", v)}
-                      />
-                    </div>
-                    {MEDICAL_HISTORY_BOOL_FIELDS.map(({ field, label }) => (
-                      <div
-                        key={field}
-                        className="flex justify-between items-baseline py-2 border-b border-dashed border-cream-200"
-                      >
-                        <span className="text-forest-600 text-sm shrink-0">{label}</span>
-                        <EditableCell
-                          value={String(!!selected[field])}
-                          type="select"
-                          options={YES_NO}
-                          onSave={(v) => savePatientField(selected, field, v)}
-                        />
-                      </div>
-                    ))}
-                    <div className="flex justify-between items-baseline py-2 border-b border-dashed border-cream-200">
-                      <span className="text-forest-600 text-sm shrink-0">Hepatitis</span>
-                      <EditableCell
-                        value={selected.hepatitis}
-                        placeholder="None"
-                        onSave={(v) => savePatientField(selected, "hepatitis", v)}
-                      />
-                    </div>
-                    <div className="flex justify-between items-baseline py-2 last:border-0">
-                      <span className="text-forest-600 text-sm shrink-0">Malignancy</span>
-                      <EditableCell
-                        value={selected.malignancy}
-                        placeholder="None"
-                        onSave={(v) => savePatientField(selected, "malignancy", v)}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="bg-white border border-cream-200 rounded-2xl p-5">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-forest-700 mb-2">
-                      History of Previous Hospitalization
-                    </p>
-                    <div className="flex justify-between items-baseline py-2 border-b border-dashed border-cream-200">
-                      <span className="text-forest-600 text-sm shrink-0">Medical</span>
-                      <EditableCell
-                        value={selected.hosp_medical}
-                        placeholder="None"
-                        onSave={(v) => savePatientField(selected, "hosp_medical", v)}
-                      />
-                    </div>
-                    <div className="flex justify-between items-baseline py-2 border-b border-dashed border-cream-200">
-                      <span className="text-forest-600 text-sm shrink-0">Surgical</span>
-                      <EditableCell
-                        value={selected.hosp_surgical}
-                        placeholder="None"
-                        onSave={(v) => savePatientField(selected, "hosp_surgical", v)}
-                      />
-                    </div>
-                    <div className="flex justify-between items-baseline py-2 border-b border-dashed border-cream-200">
-                      <span className="text-forest-600 text-sm shrink-0">Blood Transfusion</span>
-                      <EditableCell
-                        value={selected.hosp_blood_transfusion}
-                        placeholder="None"
-                        onSave={(v) => savePatientField(selected, "hosp_blood_transfusion", v)}
-                      />
-                    </div>
-                    <div className="flex justify-between items-baseline py-2 border-b border-dashed border-cream-200">
-                      <span className="text-forest-600 text-sm shrink-0">Tattoo</span>
-                      <EditableCell
-                        value={String(!!selected.has_tattoo)}
-                        type="select"
-                        options={YES_NO}
-                        onSave={(v) => savePatientField(selected, "has_tattoo", v)}
-                      />
-                    </div>
-                    <div className="flex justify-between items-baseline py-2 last:border-0">
-                      <span className="text-forest-600 text-sm shrink-0">Others</span>
-                      <EditableCell
-                        value={selected.hosp_others}
-                        placeholder="None"
-                        onSave={(v) => savePatientField(selected, "hosp_others", v)}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Box 3: Dietary Habits / Social History + Conforme */}
-                <div className="grid sm:grid-cols-2 gap-4">
-                  <div className="bg-white border border-cream-200 rounded-2xl p-5">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-forest-700 mb-2">
-                      Dietary Habits / Social History
-                    </p>
-                    <div className="flex justify-between items-baseline py-2 border-b border-dashed border-cream-200">
-                      <span className="text-forest-600 text-sm shrink-0">Sugar Sweetened Beverages / Food</span>
-                      <EditableCell
-                        value={selected.diet_sugar_beverages}
-                        placeholder="None"
-                        onSave={(v) => savePatientField(selected, "diet_sugar_beverages", v)}
-                      />
-                    </div>
-                    <div className="flex justify-between items-baseline py-2 border-b border-dashed border-cream-200">
-                      <span className="text-forest-600 text-sm shrink-0">Use of Alcohol</span>
-                      <EditableCell
-                        value={selected.diet_alcohol}
-                        placeholder="None"
-                        onSave={(v) => savePatientField(selected, "diet_alcohol", v)}
-                      />
-                    </div>
-                    <div className="flex justify-between items-baseline py-2 border-b border-dashed border-cream-200">
-                      <span className="text-forest-600 text-sm shrink-0">Use of Tobacco</span>
-                      <EditableCell
-                        value={selected.diet_tobacco}
-                        placeholder="None"
-                        onSave={(v) => savePatientField(selected, "diet_tobacco", v)}
-                      />
-                    </div>
-                    <div className="flex justify-between items-baseline py-2 last:border-0">
-                      <span className="text-forest-600 text-sm shrink-0">Betel Nut Chewing</span>
-                      <EditableCell
-                        value={selected.diet_betel_nut}
-                        placeholder="None"
-                        onSave={(v) => savePatientField(selected, "diet_betel_nut", v)}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Conforme — distinct tan background + signature line */}
-                  <div className="bg-cream-200 rounded-2xl p-5">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-forest-700 mb-4">Conforme</p>
-                    <div className="border-t border-forest-900 pt-2 mt-8">
-                      <EditableCell
-                        value={selected.conforme_name || selected.name}
-                        placeholder="Type full name to confirm"
-                        onSave={(v) => savePatientField(selected, "conforme_name", v)}
-                        className="font-semibold text-forest-950"
-                      />
-                      <p className="text-xs text-forest-600 mt-1">Patient's / Guardian's Name and Signature</p>
-                    </div>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setShowDetails(false)}
-                  className="text-xs text-forest-700 hover:underline"
-                >
-                  Hide details
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </Modal>
-
-      {/* ---------- Patient Summary popup ---------- */}
-      <Modal
-        isOpen={showSummaryModal && !!selected}
-        onClose={() => {
-          setShowSummaryModal(false);
-          setShowHistoryModal(true);
-        }}
-        size="xl"
-      >
-        {selected && (
-          <div className="space-y-5">
-            <div>
-              <EditableCell
-                value={selected.name}
-                placeholder="Patient name"
-                onSave={(v) => savePatientField(selected, "name", v)}
-                className="font-display text-xl font-bold text-forest-950"
-              />
-              <p className="text-sm text-forest-500 mt-0.5">
-                PT-{String(selected.id).padStart(4, "0")}
-                {records[0]?.dentist ? ` · Dr. ${records[0].dentist}` : ""}
-              </p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="bg-cream-100 rounded-xl px-5 py-4">
-                <p className="text-xs uppercase tracking-wide text-forest-700">Barangay</p>
-                <EditableCell
-                  value={selected.barangay}
-                  placeholder="Barangay"
-                  onSave={(v) => savePatientField(selected, "barangay", v)}
-                  className="font-semibold text-forest-950 text-lg"
-                />
-              </div>
-              <div className="bg-cream-100 rounded-xl px-5 py-4">
-                <p className="text-xs uppercase tracking-wide text-forest-700">Last visit</p>
-                <p className="font-semibold text-forest-950 text-lg">
-                  {records[0]?.record_date ? new Date(records[0].record_date).toLocaleDateString() : "—"}
-                </p>
-              </div>
             </div>
 
             {/* View only — the chart is filled in when the patient is created
@@ -2965,6 +3204,72 @@ export default function AdminPatients({ readOnly = false }) {
             <ToothChart patientId={selected.id} isAdmin={false} />
           </div>
         )}
+      </Modal>
+
+
+      {/* ---------- Treatment Record popup (Individual Patient Treatment Record of ONE visit) ----------
+          Opened from Add Service Record, Edit Service Record (editable) or the clipboard icon in
+          Service History (view only). Each service record keeps its own copy. ---------- */}
+      <Modal isOpen={treatmentPopup !== null && !!selected} onClose={() => setTreatmentPopup(null)} size="2xl">
+        {selected && treatmentPopup !== null && (() => {
+          const view = typeof treatmentPopup === "object" ? treatmentPopup.view : null;
+          const editingRec = treatmentPopup === "edit" ? records.find((x) => x.id === editingRecordId) : null;
+          const value = view
+            ? treatmentForRecord(view, selected)
+            : treatmentPopup === "add"
+            ? addTreatment
+            : recordDraft.treatment;
+          const onChange = treatmentPopup === "add" ? setAddTreatment : (t) => setRecordDraft((d) => ({ ...d, treatment: t }));
+          const forRecord = view || editingRec;
+          return (
+            <div className="space-y-3">
+              <div>
+                <h3 className="font-display text-lg font-bold text-forest-950">Individual Patient Treatment Record</h3>
+                <p className="text-sm text-forest-500 mt-0.5">
+                  {selected.name} · PT-{String(selected.id).padStart(4, "0")} ·{" "}
+                  {forRecord
+                    ? `${forRecord.procedure || "Service record"}${
+                        forRecord.record_date ? ` · ${new Date(forRecord.record_date).toLocaleDateString()}` : ""
+                      }`
+                    : "New service record"}
+                </p>
+              </div>
+              <TreatmentRecordForm
+                value={value}
+                onChange={onChange}
+                readOnly={Boolean(view) || !canEdit}
+                title={`${selected.name} (PT-${String(selected.id).padStart(4, "0")})`}
+                visitDate={view ? toDateInputValue(view.record_date) : treatmentPopup === "add" ? newRecord.record_date : recordDraft.record_date}
+                typeFlags={
+                  view
+                    ? visitTypeFlags(view.patient_type, selected, visitAge(view, selected), value.sex || selected.sex)
+                    : treatmentPopup === "add"
+                    ? addRecordType
+                    : recordDraft.type
+                }
+                onToggleType={(field) =>
+                  treatmentPopup === "add"
+                    ? setAddRecordType((t) => ({ ...t, [field]: !t[field] }))
+                    : setRecordDraft((d) => ({ ...d, type: { ...d.type, [field]: !d.type[field] } }))
+                }
+              />
+              <div className="flex items-center justify-between gap-3 pt-2 border-t border-cream-200">
+                <p className="text-xs text-forest-500">
+                  {view
+                    ? "View only — use the pencil on the record to change it."
+                    : "Saved together with this service record."}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setTreatmentPopup(null)}
+                  className="rounded-full bg-forest-900 px-5 py-1.5 text-sm font-semibold text-cream-50 hover:bg-forest-800"
+                >
+                  {view ? "Close" : "Done"}
+                </button>
+              </div>
+            </div>
+          );
+        })()}
       </Modal>
 
       {/* ---------- "Are you sure?" pop-up (archive patient / service record) ---------- */}

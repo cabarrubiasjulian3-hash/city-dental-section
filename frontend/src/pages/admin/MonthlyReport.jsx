@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Printer, Download } from "lucide-react";
 import { api } from "../../lib/api";
 import { Card, EmptyState } from "../../components/ui";
+import { TreemapChart } from "../../components/Charts";
 import { exportOfficialForm } from "./exportOfficialForm";
 import { PRINT_SPEC as SPEC } from "./printSpec"; // every print / export size lives in printSpec.js
 
@@ -210,14 +211,15 @@ function mergeServices(lists) {
 // (rows = whatever "Group by" is set to, after all filters), so it updates by
 // itself whenever a filter, the month or a count changes. Plain SVG — no
 // charting library needed.
-const CHART_COLORS = ["#16241a", "#3d5c2f", "#6d9750", "#a8874a", "#8bb56c", "#4d6844", "#c98a4b", "#a8e492", "#6b8f71", "#8a9a82", "#25401f", "#c8f0b8"];
+// Calm greens first (biggest slices get the rich greens), gold / clay / brown only as small accents.
+const CHART_COLORS = ["#2f6f4f", "#d9ab4b", "#5b86a8", "#a8cf8f", "#c8694b", "#3a9188", "#8e6b8f", "#1f4a3a", "#e3955a", "#7fbf9d", "#b8892f", "#7a8b6f"];
 const OTHERS_COLOR = "#c7bfa4";
-const MALE_COLOR = "#253522";
-const FEMALE_COLOR = "#6b9950";
+const MALE_COLOR = "#1f4d2e";
+const FEMALE_COLOR = "#e0b95c";
 
 const CHART_TYPES = [
   { key: "bar", label: "Bar graph" },
-  { key: "pie", label: "Pie chart" },
+  { key: "pie", label: "Treemap" },
   { key: "line", label: "Line graph" },
 ];
 const CHART_MEASURES = [
@@ -244,11 +246,50 @@ function niceMax(raw) {
 }
 
 const clip = (t, n = 20) => (String(t).length > n ? `${String(t).slice(0, n - 1)}…` : String(t));
+const nfmt = (n) => Number(n || 0).toLocaleString();
 
+// true one frame after the chart appears, so bars / slices can grow in
+function useGrow() {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setOn(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+  return on;
+}
+
+// small tooltip that follows the mouse inside a `relative` box
+function useChartTip() {
+  const ref = useRef(null);
+  const [tip, setTip] = useState(null);
+  return {
+    ref,
+    tip,
+    show: (e, text) => {
+      const r = ref.current?.getBoundingClientRect();
+      if (r) setTip({ x: e.clientX - r.left, y: e.clientY - r.top, text });
+    },
+    hide: () => setTip(null),
+  };
+}
+const ChartTip = ({ tip }) =>
+  tip ? (
+    <div
+      className="pointer-events-none absolute z-20 -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-lg bg-brand-900 px-2.5 py-1.5 text-xs font-medium text-brand-50 shadow-lg"
+      style={{ left: tip.x, top: tip.y - 10 }}
+    >
+      {tip.text}
+    </div>
+  ) : null;
+
+// Bar graph / line graph. Hover a bar or a point to see its exact numbers and to dim the rest.
 function AxisChart({ items, series, kind }) {
+  const grow = useGrow();
+  const { ref, tip, show, hide } = useChartTip();
+  const [hot, setHot] = useState(null); // index of the hovered item
   const W = 760;
-  const H = 340;
-  const pad = { t: 18, r: 16, b: 100, l: 42 };
+  const H = 360;
+  const pad = { t: 22, r: 16, b: 104, l: 46 };
   const pw = W - pad.l - pad.r;
   const ph = H - pad.t - pad.b;
   const baseY = pad.t + ph;
@@ -259,123 +300,195 @@ function AxisChart({ items, series, kind }) {
   const slot = pw / items.length;
   const yOf = (v) => baseY - (v / max) * ph;
   const showValues = items.length <= 12;
+  const tipText = (it) =>
+    `${it.label} — ${series.map((s) => `${s.label}: ${nfmt(it[s.key])}`).join(" · ")}`;
+  const dim = (i) => (hot != null && hot !== i ? 0.35 : 1);
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label={kind === "bar" ? "Bar graph" : "Line graph"}>
-      {ticks.map((v) => (
-        <g key={v}>
-          <line x1={pad.l} x2={W - pad.r} y1={yOf(v)} y2={yOf(v)} stroke="#ece6cf" strokeWidth="1" />
-          <text x={pad.l - 6} y={yOf(v) + 3} fontSize="10" textAnchor="end" fill="#4d6844">
-            {v}
-          </text>
-        </g>
-      ))}
-
-      {kind === "bar" &&
-        items.map((it, i) => {
-          const groupW = Math.min(58 * series.length, slot * 0.72);
-          const barW = groupW / series.length;
-          const x0 = pad.l + i * slot + (slot - groupW) / 2;
-          return (
-            <g key={it.label}>
-              {series.map((s, j) => {
-                const v = it[s.key];
-                const h = (v / max) * ph;
-                return (
-                  <g key={s.key}>
-                    <rect x={x0 + j * barW} y={baseY - h} width={Math.max(barW - 2, 2)} height={h} rx="3" fill={s.color}>
-                      <title>{`${it.label} — ${s.label}: ${v}`}</title>
-                    </rect>
-                    {showValues && v > 0 && (
-                      <text x={x0 + j * barW + barW / 2 - 1} y={baseY - h - 4} fontSize="9" textAnchor="middle" fill="#26401e">
-                        {v}
-                      </text>
-                    )}
-                  </g>
-                );
-              })}
-            </g>
-          );
-        })}
-
-      {kind === "line" &&
-        series.map((s) => (
-          <g key={s.key}>
-            <polyline
-              points={items.map((it, i) => `${pad.l + slot * (i + 0.5)},${yOf(it[s.key])}`).join(" ")}
-              fill="none"
-              stroke={s.color}
-              strokeWidth="2.5"
-              strokeLinejoin="round"
-            />
-            {items.map((it, i) => (
-              <g key={it.label}>
-                <circle cx={pad.l + slot * (i + 0.5)} cy={yOf(it[s.key])} r="4" fill={s.color}>
-                  <title>{`${it.label} — ${s.label}: ${it[s.key]}`}</title>
-                </circle>
-                {showValues && (
-                  <text x={pad.l + slot * (i + 0.5)} y={yOf(it[s.key]) - 8} fontSize="9" textAnchor="middle" fill="#26401e">
-                    {it[s.key]}
-                  </text>
-                )}
-              </g>
-            ))}
+    <div ref={ref} className="relative">
+      <ChartTip tip={tip} />
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label={kind === "bar" ? "Bar graph" : "Line graph"}>
+        <defs>
+          <linearGradient id="mr-area" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={series[0].color} stopOpacity="0.28" />
+            <stop offset="100%" stopColor={series[0].color} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        {ticks.map((v) => (
+          <g key={v}>
+            <line x1={pad.l} x2={W - pad.r} y1={yOf(v)} y2={yOf(v)} stroke="#ece6cf" strokeWidth="1" strokeDasharray={v === 0 ? "" : "3 4"} />
+            <text x={pad.l - 8} y={yOf(v) + 4} fontSize="11.5" textAnchor="end" fill="#4d6844">
+              {nfmt(v)}
+            </text>
           </g>
         ))}
 
-      {items.map((it, i) => {
-        const x = pad.l + slot * (i + 0.5);
-        return (
-          <text key={it.label} x={x} y={baseY + 14} fontSize="10" fill="#2f4029" textAnchor="end" transform={`rotate(-38 ${x} ${baseY + 14})`}>
-            <title>{it.label}</title>
-            {clip(it.label)}
-          </text>
-        );
-      })}
-    </svg>
+        {kind === "bar" &&
+          items.map((it, i) => {
+            const groupW = Math.min(58 * series.length, slot * 0.74);
+            const barW = groupW / series.length;
+            const x0 = pad.l + i * slot + (slot - groupW) / 2;
+            return (
+              <g key={it.label} style={{ opacity: dim(i), transition: "opacity .15s" }}>
+                {series.map((s, j) => {
+                  const v = it[s.key];
+                  const h = grow ? (v / max) * ph : 0;
+                  return (
+                    <g key={s.key}>
+                      <rect
+                        x={x0 + j * barW}
+                        y={baseY - h}
+                        width={Math.max(barW - 2, 2)}
+                        height={h}
+                        rx="4"
+                        fill={s.color}
+                        style={{ transition: `y .7s cubic-bezier(.2,.8,.2,1) ${i * 30}ms, height .7s cubic-bezier(.2,.8,.2,1) ${i * 30}ms` }}
+                      />
+                      {showValues && v > 0 && grow && (
+                        <text x={x0 + j * barW + barW / 2 - 1} y={baseY - h - 5} fontSize="11" fontWeight="600" textAnchor="middle" fill="#26401e">
+                          {nfmt(v)}
+                        </text>
+                      )}
+                    </g>
+                  );
+                })}
+              </g>
+            );
+          })}
+
+        {kind === "line" &&
+          series.map((s, si) => {
+            const pts = items.map((it, i) => [pad.l + slot * (i + 0.5), yOf(it[s.key])]);
+            const line = pts.map(([x, y]) => `${x},${y}`).join(" ");
+            return (
+              <g key={s.key}>
+                {series.length === 1 && pts.length > 1 && (
+                  <path d={`M${pts[0][0]},${baseY} L${line.replace(/ /g, " L")} L${pts[pts.length - 1][0]},${baseY} Z`} fill="url(#mr-area)" style={{ opacity: grow ? 1 : 0, transition: "opacity .8s" }} />
+                )}
+                <polyline points={line} fill="none" stroke={s.color} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" style={{ opacity: grow ? 1 : 0, transition: "opacity .8s" }} />
+                {items.map((it, i) => (
+                  <g key={it.label} style={{ opacity: dim(i), transition: "opacity .15s" }}>
+                    <circle cx={pts[i][0]} cy={pts[i][1]} r={hot === i ? 6 : 4.5} fill={s.color} stroke="#fbfaf4" strokeWidth="2" />
+                    {showValues && (() => {
+                      // with two lines: the higher value is written above its point, the lower one below,
+                      // so the numbers never sit on top of the other line
+                      const vals = series.map((x) => it[x.key]);
+                      const top = Math.max(...vals);
+                      const below = series.length > 1 && it[s.key] < top;
+                      if (series.length > 1 && it[s.key] === top && vals.indexOf(top) !== si) return null;
+                      // no room under a point sitting on the axis: write its number beside it instead
+                      const beside = below && pts[i][1] + 20 > baseY - 2;
+                      return (
+                        <text
+                          x={pts[i][0] + (beside ? 11 : 0)}
+                          y={beside ? pts[i][1] + 4 : pts[i][1] + (below ? 20 : -10)}
+                          fontSize="11"
+                          fontWeight="600"
+                          textAnchor={beside ? "start" : "middle"}
+                          fill={below ? "#4d6844" : "#26401e"}
+                        >
+                          {nfmt(it[s.key])}
+                        </text>
+                      );
+                    })()}
+                  </g>
+                ))}
+              </g>
+            );
+          })}
+
+        {items.map((it, i) => {
+          const x = pad.l + slot * (i + 0.5);
+          return (
+            <text key={it.label} x={x} y={baseY + 16} fontSize="11" fill="#2f4029" textAnchor="end" transform={`rotate(-38 ${x} ${baseY + 16})`} style={{ opacity: dim(i), transition: "opacity .15s" }}>
+              {clip(it.label)}
+            </text>
+          );
+        })}
+
+        {/* one invisible hover column per item: easy to hit even for tiny bars */}
+        {items.map((it, i) => (
+          <rect
+            key={`hit-${it.label}`}
+            x={pad.l + i * slot}
+            y={pad.t}
+            width={slot}
+            height={ph + 70}
+            fill="transparent"
+            className="cursor-pointer"
+            onMouseEnter={() => setHot(i)}
+            onMouseMove={(e) => show(e, tipText(it))}
+            onMouseLeave={() => {
+              setHot(null);
+              hide();
+            }}
+          />
+        ))}
+      </svg>
+    </div>
   );
 }
 
+// Pie chart drawn as a donut with the total in the middle. Hover a slice or a legend row to focus it.
 function PieSvg({ slices }) {
+  const grow = useGrow();
+  const [hot, setHot] = useState(null);
   const total = slices.reduce((sum, s) => sum + s.value, 0);
-  const R = 90;
-  const C = 100;
-  let angle = -Math.PI / 2;
-  const paths = slices.map((sl, i) => {
-    const sweep = (sl.value / total) * Math.PI * 2;
-    const x1 = C + R * Math.cos(angle);
-    const y1 = C + R * Math.sin(angle);
-    angle += sweep;
-    const x2 = C + R * Math.cos(angle);
-    const y2 = C + R * Math.sin(angle);
-    const color = sl.isOthers ? OTHERS_COLOR : CHART_COLORS[i % CHART_COLORS.length];
-    return { ...sl, color, d: `M${C},${C} L${x1},${y1} A${R},${R} 0 ${sweep > Math.PI ? 1 : 0} 1 ${x2},${y2} Z` };
-  });
+  const S = 220;
+  const T = 44;
+  const r = S / 2 - T / 2;
+  const C = 2 * Math.PI * r;
+  const items = slices.map((sl, i) => ({ ...sl, color: sl.isOthers ? OTHERS_COLOR : CHART_COLORS[i % CHART_COLORS.length] }));
+  const a = hot != null ? items[hot] : null;
+  let cursor = 0;
   return (
-    <div className="flex flex-col sm:flex-row items-center gap-6">
-      <svg viewBox="0 0 200 200" className="w-52 h-52 shrink-0" role="img" aria-label="Pie chart">
-        {paths.length === 1 ? (
-          <circle cx={C} cy={C} r={R} fill={paths[0].color} />
-        ) : (
-          paths.map((p) => (
-            <path key={p.label} d={p.d} fill={p.color} stroke="#fbfaf4" strokeWidth="1.5">
-              <title>{`${p.label}: ${p.value} (${((p.value / total) * 100).toFixed(1)}%)`}</title>
-            </path>
-          ))
-        )}
-      </svg>
-      <ul className="space-y-1.5 text-sm w-full min-w-0">
-        {paths.map((p) => (
-          <li key={p.label} className="flex items-center justify-between gap-3">
-            <span className="flex items-center gap-2 min-w-0">
-              <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: p.color }} />
-              <span className="truncate text-forest-900" title={p.label}>
-                {p.label}
-              </span>
+    <div className="flex flex-col items-center gap-6 sm:flex-row">
+      <div className="relative shrink-0" style={{ width: S, height: S }}>
+        <svg viewBox={`0 0 ${S} ${S}`} width={S} height={S} className="-rotate-90" role="img" aria-label="Pie chart">
+          <circle cx={S / 2} cy={S / 2} r={r} fill="none" stroke="#ece6cf" strokeWidth={T} />
+          {items.map((p, i) => {
+            const len = (p.value / total) * C;
+            const el = (
+              <circle
+                key={p.label}
+                cx={S / 2}
+                cy={S / 2}
+                r={r}
+                fill="none"
+                stroke={p.color}
+                strokeWidth={hot === i ? T + 6 : T}
+                strokeDasharray={`${grow ? Math.max(0, len - (items.length > 1 ? 2 : 0)) : 0} ${C}`}
+                strokeDashoffset={-cursor}
+                style={{ transition: "stroke-dasharray .8s cubic-bezier(.2,.8,.2,1), stroke-width .15s, opacity .15s", opacity: hot == null || hot === i ? 1 : 0.35, cursor: "pointer" }}
+                onMouseEnter={() => setHot(i)}
+                onMouseLeave={() => setHot(null)}
+              />
+            );
+            cursor += len;
+            return el;
+          })}
+        </svg>
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center px-12 text-center">
+          <span className="text-2xl font-extrabold tabular-nums leading-tight text-forest-950">{nfmt(a ? a.value : total)}</span>
+          <span className="line-clamp-2 text-[11px] font-medium leading-tight text-forest-700">
+            {a ? `${a.label} · ${((a.value / total) * 100).toFixed(1)}%` : "Total"}
+          </span>
+        </div>
+      </div>
+      <ul className="max-h-[24rem] w-full min-w-0 space-y-1 overflow-y-auto pr-1 text-sm">
+        {items.map((p, i) => (
+          <li
+            key={p.label}
+            onMouseEnter={() => setHot(i)}
+            onMouseLeave={() => setHot(null)}
+            className={`flex items-center gap-3 rounded-lg px-2 py-1.5 transition-colors ${hot === i ? "bg-cream-200" : ""} ${hot != null && hot !== i ? "opacity-60" : ""}`}
+          >
+            <span className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: p.color }} />
+            <span className="min-w-0 flex-1 truncate text-forest-900" title={p.label}>
+              {p.label}
             </span>
-            <span className="text-forest-700 shrink-0 tabular-nums">
-              {p.value} · {((p.value / total) * 100).toFixed(1)}%
-            </span>
+            <span className="shrink-0 font-semibold tabular-nums text-forest-950">{nfmt(p.value)}</span>
+            <span className="w-12 shrink-0 text-right text-xs tabular-nums text-forest-600">{((p.value / total) * 100).toFixed(1)}%</span>
           </li>
         ))}
       </ul>
@@ -482,7 +595,7 @@ function SuggestInput({ value, options, onSelect, placeholder, ariaLabel, width 
 const REPORT_VIEWS = [
   { key: "table", label: "Table" },
   { key: "bar", label: "Bar graph" },
-  { key: "pie", label: "Pie chart" },
+  { key: "pie", label: "Treemap" },
   { key: "line", label: "Line graph" },
 ];
 
@@ -490,7 +603,7 @@ const REPORT_VIEWS = [
 // Separate from SummaryChart below (which has its own controls).
 function ReportChartView({ rows, groupBy, kind }) {
   const canSplit = groupBy !== "services"; // services have no male/female split
-  const limit = kind === "pie" ? 10 : 15;
+  const limit = kind === "pie" ? Infinity : 15; // a pie always shows every slice
   const { items, cut } = useMemo(() => {
     let list = rows.map((r) => ({ label: r.label, m: r.m || 0, f: r.f || 0, total: r.total || 0 }));
     if (groupBy !== "age") list = [...list].sort((a, b) => b.total - a.total); // age groups keep their natural order
@@ -527,7 +640,7 @@ function ReportChartView({ rows, groupBy, kind }) {
           ))}
         </div>
       )}
-      {kind === "pie" ? <PieSvg slices={pieSlices} /> : <AxisChart items={items} series={series} kind={kind} />}
+      {kind === "pie" ? <TreemapChart data={pieSlices} /> : <AxisChart items={items} series={series} kind={kind} />}
       {cut.length > 0 && (
         <p className="text-xs text-forest-500 mt-1">
           Showing the top {items.length} of {items.length + cut.length}
@@ -563,7 +676,7 @@ function SummaryChart({ rows, groupBy, title }) {
     const rankKey = series.length === 1 ? series[0].key : "total";
     if (groupBy !== "age") list = [...list].sort((a, b) => b[rankKey] - a[rankKey]); // age groups keep their natural order
     let rest = [];
-    if (topN && list.length > topN) {
+    if (topN && type !== "pie" && list.length > topN) {
       rest = list.slice(topN);
       list = list.slice(0, topN);
     }
@@ -606,6 +719,7 @@ function SummaryChart({ rows, groupBy, title }) {
             </select>
           </label>
         )}
+        {type !== "pie" && (
         <label className="text-xs text-forest-700">
           How many
           <select value={topN} onChange={(e) => setTopN(Number(e.target.value))} className={selectCls}>
@@ -616,6 +730,7 @@ function SummaryChart({ rows, groupBy, title }) {
             ))}
           </select>
         </label>
+        )}
         {type !== "pie" && series.length > 1 && (
           <div className="flex items-center gap-4 pb-2">
             {series.map((s) => (
@@ -630,7 +745,7 @@ function SummaryChart({ rows, groupBy, title }) {
 
       {hasData ? (
         type === "pie" ? (
-          <PieSvg slices={pieSlices} />
+          <TreemapChart data={pieSlices} />
         ) : (
           <AxisChart items={items} series={series} kind={type} />
         )

@@ -59,6 +59,13 @@ if (!userColumns.includes("parent_guardian")) {
 if (!userColumns.includes("cellphone_no")) {
   db.exec("ALTER TABLE users ADD COLUMN cellphone_no TEXT");
 }
+// Gender (identity) is kept separate from sex: reports and Patient Type still follow `sex`.
+if (!userColumns.includes("gender")) {
+  db.exec("ALTER TABLE users ADD COLUMN gender TEXT");
+}
+if (!userColumns.includes("gender_other")) {
+  db.exec("ALTER TABLE users ADD COLUMN gender_other TEXT");
+}
 
 // Individual Patient Treatment Record fields (Membership, Medical History,
 // Hospitalization History, Dietary/Social History, Conforme) — mirrors the
@@ -371,6 +378,10 @@ for (const col of ["report_month", "report_field", "report_barangay", "report_de
 // an earlier visit's record shows. Added here instead of in the original
 // CREATE TABLE so existing databases pick it up without losing data.
 if (!dentalRecordColumns.includes("patient_type")) db.exec(`ALTER TABLE dental_records ADD COLUMN patient_type TEXT`);
+// treatment_record: the Individual Patient Treatment Record of THIS visit (membership, medical
+// history, hospitalization, diet, conforme) as JSON — see lib/treatmentRecord.js. Every service
+// record keeps its own copy, so editing one visit never changes the others.
+if (!dentalRecordColumns.includes("treatment_record")) db.exec(`ALTER TABLE dental_records ADD COLUMN treatment_record TEXT`);
 
 // Lightweight migration for databases created before barangay_schedule grew
 // the target (headcount goal) and status (Upcoming/Ongoing/Completed) columns

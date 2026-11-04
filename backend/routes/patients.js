@@ -52,7 +52,7 @@ function withAge(patient) {
 router.get("/", requireRole("admin", "doctor"), (req, res) => {
   const rows = db
     .prepare(
-      `SELECT u.id, u.name, u.email, u.birthdate, u.sex, u.address, u.occupation, u.barangay,
+      `SELECT u.id, u.name, u.email, u.birthdate, u.sex, u.gender, u.gender_other, u.address, u.occupation, u.barangay,
               u.surname, u.first_name, u.middle_name, u.place_of_birth, u.parent_guardian,
               u.cellphone_no,
               u.is_pregnant, u.is_senior_citizen, u.is_pwd, u.created_at,
@@ -66,7 +66,12 @@ router.get("/", requireRole("admin", "doctor"), (req, res) => {
                  AND d.procedure = (
                    SELECT d2.procedure FROM dental_records d2 WHERE d2.patient_id = u.id
                      ORDER BY d2.record_date DESC, d2.id DESC LIMIT 1
-                 )) AS latest_procedure_visits
+                 )) AS latest_procedure_visits,
+              (SELECT group_concat(d.record_date, ',') FROM dental_records d WHERE d.patient_id = u.id
+                 AND d.procedure = (
+                   SELECT d2.procedure FROM dental_records d2 WHERE d2.patient_id = u.id
+                     ORDER BY d2.record_date DESC, d2.id DESC LIMIT 1
+                 )) AS latest_procedure_dates
        FROM users u
        WHERE u.role = 'patient'
          AND (
@@ -130,7 +135,7 @@ router.post("/import/xlsx", requireRole("admin"), upload.single("file"), async (
 router.get("/export/xlsx", requireRole("admin"), async (req, res) => {
   const patients = db
     .prepare(
-      `SELECT id, name, birthdate, sex, address, occupation, barangay, is_pregnant, is_senior_citizen, is_pwd
+      `SELECT id, name, birthdate, sex, gender, gender_other, address, occupation, barangay, is_pregnant, is_senior_citizen, is_pwd
        FROM users WHERE role = 'patient' ORDER BY name ASC`
     )
     .all();
@@ -151,6 +156,7 @@ router.get("/export/xlsx", requireRole("admin"), async (req, res) => {
     { header: "Full Name", key: "name", width: 24 },
     { header: "Age", key: "age", width: 8 },
     { header: "Sex", key: "sex", width: 10 },
+    { header: "Gender", key: "gender", width: 18 },
     { header: "Barangay", key: "barangay", width: 20 },
     { header: "Pregnant", key: "pregnant", width: 10 },
     { header: "Senior Citizen", key: "senior", width: 14 },
@@ -170,6 +176,7 @@ router.get("/export/xlsx", requireRole("admin"), async (req, res) => {
       name: p.name,
       age: age ?? "",
       sex: p.sex || "",
+      gender: p.gender === "Prefer to self-describe" ? p.gender_other || p.gender : p.gender || "",
       barangay: p.barangay || "",
       pregnant: p.is_pregnant ? "Yes" : "No",
       senior: p.is_senior_citizen ? "Yes" : "No",
@@ -210,7 +217,7 @@ router.patch("/:id", requireRole("admin", "doctor"), (req, res) => {
   }
   const {
     name, email, barangay, is_pregnant, is_senior_citizen, is_pwd,
-    address, occupation, sex, birthdate, surname, first_name,
+    address, occupation, sex, gender, gender_other, birthdate, surname, first_name,
     middle_name, place_of_birth, parent_guardian, cellphone_no,
     is_nhts_pr, is_4ps, is_indigenous_people, philhealth_no, sss_no, gsis_no,
     allergies, has_hypertension_cva, has_diabetes_mellitus, has_blood_disorders,
@@ -240,6 +247,8 @@ router.patch("/:id", requireRole("admin", "doctor"), (req, res) => {
        address = COALESCE(?, address),
        occupation = COALESCE(?, occupation),
        sex = COALESCE(?, sex),
+       gender = COALESCE(?, gender),
+       gender_other = COALESCE(?, gender_other),
        birthdate = COALESCE(?, birthdate),
        surname = COALESCE(?, surname),
        first_name = COALESCE(?, first_name),
@@ -282,6 +291,8 @@ router.patch("/:id", requireRole("admin", "doctor"), (req, res) => {
     address ?? null,
     occupation ?? null,
     sex ?? null,
+    gender ?? null,
+    gender_other ?? null,
     birthdate ?? null,
     surname ?? null,
     first_name ?? null,
@@ -322,7 +333,7 @@ router.patch("/:id", requireRole("admin", "doctor"), (req, res) => {
 
   const patient = db
     .prepare(
-      `SELECT id, name, email, birthdate, sex, address, occupation, barangay,
+      `SELECT id, name, email, birthdate, sex, gender, gender_other, address, occupation, barangay,
               surname, first_name, middle_name, place_of_birth, parent_guardian, cellphone_no,
               is_pregnant, is_senior_citizen, is_pwd, created_at,
               last_edited_by, last_edited_role, last_edited_at,
@@ -349,7 +360,7 @@ router.get("/:id", (req, res) => {
   }
   const patient = db
     .prepare(
-      `SELECT id, name, email, birthdate, sex, address, occupation, barangay,
+      `SELECT id, name, email, birthdate, sex, gender, gender_other, address, occupation, barangay,
               surname, first_name, middle_name, place_of_birth, parent_guardian, cellphone_no,
               is_pregnant, is_senior_citizen, is_pwd, created_at,
               last_edited_by, last_edited_role, last_edited_at,
@@ -388,6 +399,8 @@ router.post("/", requireRole("admin", "doctor"), (req, res) => {
     email,
     birthdate,
     sex,
+    gender,
+    gender_other,
     barangay,
     address,
     occupation,
@@ -418,13 +431,15 @@ router.post("/", requireRole("admin", "doctor"), (req, res) => {
           password_hash,
           birthdate,
           sex,
+          gender,
+          gender_other,
           barangay,
           address,
           occupation,
           parent_guardian,
           cellphone_no
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       "patient",
@@ -433,6 +448,8 @@ router.post("/", requireRole("admin", "doctor"), (req, res) => {
       password_hash,
       birthdate || null,
       sex || null,
+      gender || null,
+      gender_other || null,
       barangay || null,
       address || null,
       occupation || null,
@@ -445,7 +462,7 @@ router.post("/", requireRole("admin", "doctor"), (req, res) => {
 
   const patient = db
     .prepare(
-      `SELECT id, name, email, birthdate, sex, address, occupation, barangay, is_pregnant, is_senior_citizen, is_pwd, created_at,
+      `SELECT id, name, email, birthdate, sex, gender, gender_other, address, occupation, barangay, is_pregnant, is_senior_citizen, is_pwd, created_at,
               last_edited_by, last_edited_role, last_edited_at
        FROM users WHERE id = ?`
     )

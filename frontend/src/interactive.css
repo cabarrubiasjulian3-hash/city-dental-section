@@ -1,0 +1,58 @@
+/* Website-wide animations and hover/press effects. Imported once from main.jsx. */
+
+html { scroll-behavior: smooth; }
+
+/* Pop-ups: the dark backdrop fades in and the box pops up a little. */
+.fixed.inset-0.z-50,
+.fixed.inset-0.z-\[70\] { animation: ix-fade 0.18s ease-out both; }
+.fixed.inset-0.z-50 > .relative,
+.fixed.inset-0.z-\[70\] > div { animation: ix-pop 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.2) both; }
+
+/* Buttons feel pressable. */
+button:not(:disabled), [role="button"], a { transition: transform 0.12s ease, background-color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease, color 0.15s ease; }
+button:not(:disabled):hover { box-shadow: 0 2px 8px rgb(0 0 0 / 0.08); }
+button:not(:disabled):active { transform: scale(0.96); box-shadow: none; }
+button:disabled { cursor: not-allowed; }
+
+/* Table rows light up under the cursor; clickable rows show a hand. */
+table tbody tr { transition: background-color 0.15s ease; }
+table tbody tr:hover { background-color: color-mix(in srgb, currentColor 5%, transparent); }
+
+/* Cards/boxes lift slightly when hovered. */
+.rounded-2xl.border:not(.fixed *):hover { box-shadow: 0 4px 14px rgb(0 0 0 / 0.06); }
+.rounded-2xl.border { transition: box-shadow 0.2s ease, transform 0.2s ease; }
+
+/* Inputs: clear focus ring. */
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible {
+  outline: 2px solid var(--color-leaf-500);
+  outline-offset: 2px;
+}
+input, select, textarea { transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease; }
+
+/* Pages ease in when you move between them. */
+main { animation: ix-rise 0.3s ease-out both; }
+
+/* Loading bar at the very top while the server is working. */
+.ix-bar { position: fixed; top: 0; left: 0; height: 3px; width: 100%; z-index: 100; pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--color-leaf-500), transparent); background-size: 40% 100%; background-repeat: no-repeat;
+  opacity: 0; transition: opacity 0.2s ease; }
+.ix-bar-on { opacity: 1; animation: ix-slide 1s linear infinite; }
+
+/* Toasts (bottom-right). */
+.ix-toasts { position: fixed; right: 16px; bottom: 16px; z-index: 110; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; max-width: calc(100vw - 32px); }
+.ix-toast { display: flex; align-items: center; gap: 8px; border-radius: 9999px; padding: 10px 18px; font-size: 14px; font-weight: 600; color: #fbfaf4;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.25); animation: ix-toast-in 0.25s cubic-bezier(0.2, 0.9, 0.3, 1.2) both; text-align: left; }
+.ix-ok { background: var(--color-brand-900, #253522); }
+.ix-error { background: #b42318; }
+.ix-toast span { display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; border-radius: 9999px; background: rgb(255 255 255 / 0.2); font-size: 12px; }
+
+@keyframes ix-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ix-pop { from { opacity: 0; transform: translateY(12px) scale(0.97); } to { opacity: 1; transform: none; } }
+@keyframes ix-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes ix-slide { from { background-position: -40% 0; } to { background-position: 140% 0; } }
+@keyframes ix-toast-in { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+@media print { .ix-bar, .ix-toasts { display: none !important; } }

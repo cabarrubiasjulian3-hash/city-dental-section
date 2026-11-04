@@ -43,7 +43,9 @@ export default function PortalLayout({ title, subtitle, navItems }) {
   const location = useLocation();
   // Purely a UI show/hide toggle for the sidebar — doesn't touch any nav
   // items, routes, or page content. Defaults open (current behavior).
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // On a phone the sidebar is a slide-over drawer, so it starts closed there;
+  // on a computer-sized screen it starts open (current behavior).
+  const [sidebarOpen, setSidebarOpen] = useState(() => typeof window === "undefined" || window.innerWidth >= 768);
   // Profile dropdown (avatar + name in the header, top right).
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   // Which of the three profile-menu modals is open: "settings" | "help" |
@@ -58,6 +60,11 @@ export default function PortalLayout({ title, subtitle, navItems }) {
     .sort((a, b) => b.to.length - a.to.length)
     .find((item) => (item.end ? location.pathname === item.to : location.pathname.startsWith(item.to)));
   const pageTitle = currentNavItem?.label ?? "Dashboard";
+
+  // On a phone, close the drawer after choosing a page so it doesn't cover it.
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.innerWidth < 768) setSidebarOpen(false);
+  }, [location.pathname]);
 
   function handleLogout() {
     // Navigate first, then clear the session on the *next* tick (setTimeout
@@ -176,9 +183,20 @@ export default function PortalLayout({ title, subtitle, navItems }) {
           printing — only the page content (e.g. the report) should print.
           When collapsed (sidebarOpen = false), width animates to 0 instead of
           unmounting — same nav items/content, just visually tucked away. */}
+      {/* Phone: the sidebar is a fixed slide-over drawer with a dimmed backdrop
+          (tap the backdrop to close). md and up: the normal collapsible sidebar. */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-forest-950/40 md:hidden print:hidden"
+          onClick={() => setSidebarOpen(false)}
+          aria-hidden="true"
+        />
+      )}
       <aside
-        className={`shrink-0 bg-cream-50 border-cream-200 flex flex-col overflow-hidden print:hidden transition-all duration-200 ${
-          sidebarOpen ? "w-64 border-r" : "w-0 border-r-0"
+        className={`fixed inset-y-0 left-0 z-40 w-64 md:static md:z-auto shrink-0 bg-cream-50 border-cream-200 flex flex-col overflow-hidden print:hidden transition-all duration-200 ${
+          sidebarOpen
+            ? "translate-x-0 border-r shadow-[0_0_30px_rgba(37,53,34,0.3)] md:shadow-none"
+            : "-translate-x-full pointer-events-none md:translate-x-0 md:pointer-events-auto md:w-0 md:border-r-0"
         }`}
       >
         <div className="w-64 h-full flex flex-col overflow-y-auto">
@@ -228,8 +246,8 @@ export default function PortalLayout({ title, subtitle, navItems }) {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0 print:block print:w-full">
-        <header className="flex items-center justify-between px-8 py-5 bg-[#26401e] print:hidden">
-          <div className="flex items-center gap-3">
+        <header className="flex items-center justify-between gap-3 px-4 py-3 sm:px-6 md:px-8 md:py-5 bg-[#26401e] print:hidden">
+          <div className="flex min-w-0 items-center gap-3">
             <button
               onClick={() => setSidebarOpen((v) => !v)}
               className="w-9 h-9 rounded-full bg-brand-800 text-brand-50 flex items-center justify-center shrink-0"
@@ -237,9 +255,9 @@ export default function PortalLayout({ title, subtitle, navItems }) {
             >
               {sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
             </button>
-            <h1 className="text-xl font-display font-bold text-[#ebebc2]">{pageTitle}</h1>
+            <h1 className="truncate text-lg md:text-xl font-display font-bold text-[#ebebc2]">{pageTitle}</h1>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex shrink-0 items-center gap-3 sm:gap-4">
             {/* Notification bell — admin (new patients / staff), doctor
                 (unanswered patient messages) and patient (clinic replies,
                 changes to their info, new dental records, barangay dental
@@ -264,7 +282,7 @@ export default function PortalLayout({ title, subtitle, navItems }) {
                 {notifOpen && (
                   <>
                     <div className="fixed inset-0 z-10" onClick={() => setNotifOpen(false)} />
-                    <div className="absolute right-0 top-full mt-2 w-80 bg-cream-50 rounded-2xl shadow-[0_8px_24px_rgba(37,53,34,0.25)] z-20 max-h-96 overflow-y-auto">
+                    <div className="absolute right-0 top-full mt-2 w-[min(20rem,calc(100vw-2rem))] bg-cream-50 rounded-2xl shadow-[0_8px_24px_rgba(37,53,34,0.25)] z-20 max-h-96 overflow-y-auto">
                       <p className="px-4 pt-4 pb-2 text-sm font-display font-bold text-forest-950">Notifications</p>
                       {notifications.length === 0 ? (
                         <p className="px-4 pb-4 text-sm text-forest-600">No notifications yet.</p>
@@ -306,14 +324,14 @@ export default function PortalLayout({ title, subtitle, navItems }) {
                 <div className="w-8 h-8 rounded-full bg-leaf-300 text-brand-900 flex items-center justify-center text-sm font-semibold">
                   {user?.name?.[0] ?? "?"}
                 </div>
-                <span className="text-sm font-medium text-brand-50">{user?.name}</span>
+                <span className="hidden sm:inline max-w-[10rem] truncate text-sm font-medium text-brand-50">{user?.name}</span>
               </button>
 
               {profileMenuOpen && (
                 <>
                   {/* Invisible click-outside-to-close overlay */}
                   <div className="fixed inset-0 z-10" onClick={() => setProfileMenuOpen(false)} />
-                  <div className="absolute right-0 top-full mt-2 w-72 bg-cream-50 rounded-2xl shadow-[0_8px_24px_rgba(37,53,34,0.25)] z-20 p-3">
+                  <div className="absolute right-0 top-full mt-2 w-[min(18rem,calc(100vw-2rem))] bg-cream-50 rounded-2xl shadow-[0_8px_24px_rgba(37,53,34,0.25)] z-20 p-3">
                     <div className="flex items-center gap-3 border-2 border-leaf-300 rounded-xl px-3 py-2.5">
                       <div className="w-9 h-9 rounded-full bg-leaf-300 text-brand-900 flex items-center justify-center text-sm font-semibold shrink-0">
                         {user?.name?.[0] ?? "?"}
@@ -362,7 +380,16 @@ export default function PortalLayout({ title, subtitle, navItems }) {
             </div>
           </div>
         </header>
-        <main className="flex-1 p-8 overflow-y-auto print:overflow-visible print:h-auto print:p-0">
+        {/* Phone-friendly page area: less padding, and any wide table scrolls
+            sideways inside the page instead of stretching the whole screen. */}
+        <style>{`
+          @media (max-width: 767px) {
+            .portal-main table { display: block; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+            .portal-main img, .portal-main canvas, .portal-main svg { max-width: 100%; }
+            .portal-main h2 { overflow-wrap: anywhere; }
+          }
+        `}</style>
+        <main className="portal-main flex-1 min-w-0 p-4 sm:p-6 md:p-8 overflow-y-auto overflow-x-hidden print:overflow-visible print:h-auto print:p-0">
           <Outlet />
         </main>
       </div>

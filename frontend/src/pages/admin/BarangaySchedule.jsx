@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Pencil, Archive as ArchiveIcon, Pause, Play, List, CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
+import { Pencil, Archive as ArchiveIcon, Pause, Play, List, CalendarDays, ChevronLeft, ChevronRight, CheckCircle2, XCircle } from "lucide-react";
 import { api } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
-import { Card, StatCard, Badge, EmptyState } from "../../components/ui";
+import { Card, Badge, EmptyState } from "../../components/ui";
+import { AnimatedNumber } from "../../components/Charts";
 import EditableCell from "../../components/EditableCell";
 import EditedBy from "../../components/EditedBy";
 import Modal from "../../components/Modal";
@@ -558,10 +559,56 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
           />
         </div>
 
+        <style>{`
+          @keyframes bs-card-in { from { opacity: 0; transform: translateY(12px) scale(0.97); } to { opacity: 1; transform: none; } }
+          @keyframes bs-icon-pop { 0% { transform: scale(0.5) rotate(-12deg); opacity: 0; } 70% { transform: scale(1.12) rotate(4deg); } 100% { transform: none; opacity: 1; } }
+          @keyframes bs-bar { from { width: 0; } }
+          @keyframes bs-ring { 0% { box-shadow: 0 0 0 0 var(--bs-c); } 70% { box-shadow: 0 0 0 8px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+          .bs-stat { animation: bs-card-in 0.5s cubic-bezier(.2,.8,.2,1) both; transition: transform 0.18s ease, box-shadow 0.18s ease; }
+          .bs-stat:hover { transform: translateY(-3px); box-shadow: 0 8px 20px rgb(0 0 0 / 0.08); }
+          .bs-stat:hover .bs-icon { transform: scale(1.1) rotate(-6deg); }
+          .bs-icon { animation: bs-icon-pop 0.6s cubic-bezier(.2,.8,.2,1) both; transition: transform 0.2s ease; }
+          .bs-icon-live { animation: bs-icon-pop 0.6s cubic-bezier(.2,.8,.2,1) both, bs-ring 2.4s ease-out 1s infinite; }
+          .bs-bar { animation: bs-bar 0.9s cubic-bezier(.2,.8,.2,1) 0.2s both; }
+          @media (prefers-reduced-motion: reduce) { .bs-stat, .bs-icon, .bs-icon-live, .bs-bar { animation: none !important; transition: none !important; } }
+        `}</style>
         <div className="grid sm:grid-cols-3 gap-4">
-          <StatCard label="Upcoming" value={monthStats.Upcoming} />
-          <StatCard label="Completed" value={monthStats.Completed} />
-          <StatCard label="Not Completed" value={monthStats["Not Completed"]} />
+          {(() => {
+            const total = monthStats.Upcoming + monthStats.Completed + monthStats["Not Completed"];
+            return [
+              { label: "Upcoming", value: monthStats.Upcoming, color: "#5b86a8", Icon: CalendarDays, hint: "Still to happen", live: true },
+              { label: "Completed", value: monthStats.Completed, color: "#4a9d3f", Icon: CheckCircle2, hint: "Visit done" },
+              { label: "Not Completed", value: monthStats["Not Completed"], color: "#c8694b", Icon: XCircle, hint: "Did not happen" },
+            ].map((c, i) => (
+              <div
+                key={`${c.label}-${statsMonth}`}
+                className="bs-stat rounded-2xl border border-cream-200 bg-white p-5"
+                style={{ animationDelay: `${i * 90}ms`, "--bs-c": `${c.color}55` }}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-forest-600">{c.label}</p>
+                  <span
+                    className={`${c.live && c.value > 0 ? "bs-icon-live" : "bs-icon"} flex h-9 w-9 items-center justify-center rounded-xl`}
+                    style={{ backgroundColor: `${c.color}22`, color: c.color, animationDelay: `${i * 90 + 150}ms` }}
+                  >
+                    <c.Icon size={18} />
+                  </span>
+                </div>
+                <p className="mt-2 text-3xl font-display font-extrabold leading-none tabular-nums text-forest-950">
+                  <AnimatedNumber value={c.value} />
+                </p>
+                <span className="mt-3 block h-1.5 overflow-hidden rounded-full bg-cream-200">
+                  <span
+                    className="bs-bar block h-1.5 rounded-full"
+                    style={{ width: `${total ? Math.max((c.value / total) * 100, c.value ? 4 : 0) : 0}%`, backgroundColor: c.color }}
+                  />
+                </span>
+                <p className="mt-1.5 text-xs text-forest-600">
+                  {total ? `${Math.round((c.value / total) * 100)}% · ${c.hint}` : c.hint}
+                </p>
+              </div>
+            ));
+          })()}
         </div>
       </div>
 
