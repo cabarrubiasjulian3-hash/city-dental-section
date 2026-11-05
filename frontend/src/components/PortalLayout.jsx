@@ -400,7 +400,7 @@ export default function PortalLayout({ title, subtitle, navItems }) {
             .portal-main { zoom: 0.78; }
           }
         `}</style>
-        <main className="portal-main flex-1 min-w-0 p-4 sm:p-6 md:p-8 overflow-y-auto overflow-x-hidden print:overflow-visible print:h-auto print:p-0">
+        <main className="portal-main flex-1 min-w-0 p-4 sm:p-6 md:p-8 overflow-y-auto max-md:overflow-x-hidden print:overflow-visible print:h-auto print:p-0">
           <Outlet />
         </main>
       </div>

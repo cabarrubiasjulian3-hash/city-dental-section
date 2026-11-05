@@ -243,17 +243,17 @@ export default function PatientDashboard() {
 
       {/* ---------- Stats ---------- */}
       {totalVisits > 0 ? (
-        <div className="grid gap-4 sm:grid-cols-3">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
           {stats.map((c, i) => (
             <div
               key={c.label}
-              className="pd-rise pd-card rounded-2xl border border-cream-200 bg-cream-50 p-5"
+              className={`pd-rise pd-card min-w-0 rounded-2xl border border-cream-200 bg-cream-50 p-3 sm:p-5 ${i === 2 ? "col-span-2 sm:col-span-1" : ""}`}
               style={{ animationDelay: `${120 + i * 90}ms` }}
             >
               <div className="flex items-center justify-between gap-2">
-                <p className="text-xs font-semibold uppercase tracking-wide text-forest-600">{c.label}</p>
+                <p className="text-[10px] sm:text-xs font-semibold uppercase max-sm:leading-tight tracking-wide text-forest-600">{c.label}</p>
                 <span
-                  className="pd-ico pd-pop flex h-9 w-9 items-center justify-center rounded-xl"
+                  className="pd-ico pd-pop flex h-8 w-8 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-xl"
                   style={{ backgroundColor: `${c.color}22`, color: c.color, animationDelay: `${250 + i * 90}ms` }}
                 >
                   <c.Icon size={18} />

@@ -21,18 +21,20 @@ export function Card({ title, subtitle, action, className = "", children }) {
   );
 }
 
+// Compact on phones (smaller padding/number) so two fit side by side in a
+// "grid grid-cols-2" row; full size from the sm breakpoint up.
 export function StatCard({ label, value, subtitle, icon }) {
   return (
-    <div className="bg-cream-50 border border-cream-200 rounded-2xl p-5">
+    <div className="min-w-0 bg-cream-50 border border-cream-200 rounded-2xl p-3 sm:p-5">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-xs font-semibold uppercase tracking-wide text-forest-600">{label}</p>
+        <p className="text-[10px] sm:text-xs font-semibold uppercase max-sm:leading-tight tracking-wide text-forest-600">{label}</p>
         {icon && (
-          <span className="w-8 h-8 rounded-full bg-cream-200 text-forest-900 flex items-center justify-center shrink-0">
+          <span className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-cream-200 text-forest-900 flex items-center justify-center shrink-0">
             {icon}
           </span>
         )}
       </div>
-      <p className="mt-2 text-2xl font-display font-extrabold text-forest-950">{value}</p>
+      <p className="mt-2 text-xl sm:text-2xl font-display font-extrabold text-forest-950">{value}</p>
       {subtitle && <p className="text-xs text-forest-500 mt-1">{subtitle}</p>}
     </div>
   );

@@ -21,25 +21,25 @@ const nf = (n) => Number(n || 0).toLocaleString();
 function KpiCard({ label, icon, hero = false, children, footer }) {
   return (
     <div
-      className={`group relative overflow-hidden rounded-2xl border p-5 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg ${
+      className={`group relative min-w-0 overflow-hidden rounded-2xl border p-3 sm:p-5 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg ${
         hero ? "border-brand-900 bg-brand-900 text-brand-50" : "border-cream-200 bg-cream-50"
       }`}
     >
       {hero && <div className="pointer-events-none absolute -right-8 -top-8 h-32 w-32 rounded-full bg-white/5" />}
       <div className="flex items-center justify-between gap-2">
-        <p className={`text-xs font-semibold uppercase tracking-wide ${hero ? "text-brand-50/70" : "text-forest-600"}`}>{label}</p>
+        <p className={`text-[10px] sm:text-xs font-semibold uppercase max-sm:leading-tight tracking-wide ${hero ? "text-brand-50/70" : "text-forest-600"}`}>{label}</p>
         <span
-          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
+          className={`flex h-7 w-7 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-full ${
             hero ? "bg-white/15 text-brand-50" : "bg-cream-200 text-forest-900"
           }`}
         >
           {icon}
         </span>
       </div>
-      <div className={`mt-3 font-display text-3xl font-extrabold tabular-nums leading-none ${hero ? "" : "text-forest-950"}`}>
+      <div className={`mt-2 sm:mt-3 font-display text-2xl sm:text-3xl font-extrabold tabular-nums leading-none ${hero ? "" : "text-forest-950"}`}>
         {children}
       </div>
-      {footer && <div className={`mt-3 text-xs ${hero ? "text-brand-50/70" : "text-forest-600"}`}>{footer}</div>}
+      {footer && <div className={`mt-2 sm:mt-3 text-[11px] sm:text-xs ${hero ? "text-brand-50/70" : "text-forest-600"}`}>{footer}</div>}
     </div>
   );
 }
@@ -53,7 +53,7 @@ function DashboardSkeleton() {
         <div className={`${block} h-8 w-48`} />
         <div className={`${block} h-4 w-96 max-w-full`} />
       </div>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         {[0, 1, 2, 3].map((i) => (
           <div key={i} className={`${block} h-32`} />
         ))}
@@ -143,7 +143,7 @@ export default function AdminDashboard({ readOnly = false }) {
       </div>
 
       {/* ---- KPI row: the first (dark) card is the headline number ---- */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <KpiCard
           hero
           label="Overall Total Served"

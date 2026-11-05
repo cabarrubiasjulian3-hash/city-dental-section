@@ -572,7 +572,7 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
           .bs-bar { animation: bs-bar 0.9s cubic-bezier(.2,.8,.2,1) 0.2s both; }
           @media (prefers-reduced-motion: reduce) { .bs-stat, .bs-icon, .bs-icon-live, .bs-bar { animation: none !important; transition: none !important; } }
         `}</style>
-        <div className="grid sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
           {(() => {
             const total = monthStats.Upcoming + monthStats.Completed + monthStats["Not Completed"];
             return [
@@ -582,19 +582,19 @@ export default function AdminBarangaySchedule({ readOnly = false }) {
             ].map((c, i) => (
               <div
                 key={`${c.label}-${statsMonth}`}
-                className="bs-stat rounded-2xl border border-cream-200 bg-white p-5"
+                className={`bs-stat min-w-0 rounded-2xl border border-cream-200 bg-white p-3 sm:p-5 ${i === 2 ? "col-span-2 sm:col-span-1" : ""}`}
                 style={{ animationDelay: `${i * 90}ms`, "--bs-c": `${c.color}55` }}
               >
                 <div className="flex items-center justify-between gap-2">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-forest-600">{c.label}</p>
+                  <p className="text-[10px] sm:text-xs font-semibold uppercase max-sm:leading-tight tracking-wide text-forest-600">{c.label}</p>
                   <span
-                    className={`${c.live && c.value > 0 ? "bs-icon-live" : "bs-icon"} flex h-9 w-9 items-center justify-center rounded-xl`}
+                    className={`${c.live && c.value > 0 ? "bs-icon-live" : "bs-icon"} flex h-8 w-8 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-xl`}
                     style={{ backgroundColor: `${c.color}22`, color: c.color, animationDelay: `${i * 90 + 150}ms` }}
                   >
                     <c.Icon size={18} />
                   </span>
                 </div>
-                <p className="mt-2 text-3xl font-display font-extrabold leading-none tabular-nums text-forest-950">
+                <p className="mt-2 text-2xl sm:text-3xl font-display font-extrabold leading-none tabular-nums text-forest-950">
                   <AnimatedNumber value={c.value} />
                 </p>
                 <span className="mt-3 block h-1.5 overflow-hidden rounded-full bg-cream-200">
